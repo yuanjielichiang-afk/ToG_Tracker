@@ -33,10 +33,24 @@ def run_export():
             frm = OpniRawIO.load_frame(f, raw_hdr, fi)
             frames.append(frm)
 
+    # Step 1 Anchor Clusters for T/TL zone identification
+    step1_json = r'C:\PROJECT\ToG_Tracker\step1_output\step1_report.json'
+    with open(step1_json, 'r') as f:
+        s1 = json.load(f)
+    anchor_clusters = s1.get('anchor_clusters', [])
+    is_anchor = np.zeros(num_frames, dtype=bool)
+    for c in anchor_clusters:
+        is_anchor[c['start']: c['end'] + 1] = True
+
     tracks = {}
     
     # 1. Ground truth track points
-    tracks['gth'] = [{'x': round(float(gth_x[i]), 3), 'y': round(float(gth_y[i]), 3)} for i in range(num_frames)]
+    tracks['gth'] = [{
+        'x': round(float(gth_x[i]), 3), 
+        'y': round(float(gth_y[i]), 3),
+        'is_t': bool(is_anchor[i]),
+        'squal': 0.0
+    } for i in range(num_frames)]
 
     # 2. Simulate the 3 modes using tracker_core
     print("Simulating Mode: NORMAL...")
@@ -54,7 +68,9 @@ def run_export():
             'y': round(float(res['est_y']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': in_basin,
-            'int': False
+            'int': False,
+            'is_t': bool(is_anchor[fi]),
+            'squal': round(float(res['squal']), 1)
         })
     tracks['normal'] = norm_pts
 
@@ -72,7 +88,9 @@ def run_export():
             'y': round(float(res['est_y']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': res['in_basin'],
-            'int': res['teacher_intervened']
+            'int': res['teacher_intervened'],
+            'is_t': bool(is_anchor[fi]),
+            'squal': round(float(res['squal']), 1)
         })
     tracks['teacher'] = teach_pts
 
@@ -90,24 +108,35 @@ def run_export():
             'y': round(float(res['est_y']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': True,
-            'int': False
+            'int': False,
+            'is_t': bool(is_anchor[fi]),
+            'squal': round(float(res['squal']), 1)
         })
     tracks['ideal'] = ideal_pts
 
     # 3. Export separate TXT files for the desktop tool
-    txt_files = {
-        'Track_A_GroundTruth.txt': [(p['x'], p['y']) for p in tracks['gth']],
-        'Track_B_NormalMode.txt': [(p['x'], p['y']) for p in tracks['normal']],
-        'Track_C_TeacherMode.txt': [(p['x'], p['y']) for p in tracks['teacher']],
-        'Track_D_IdealMode.txt': [(p['x'], p['y']) for p in tracks['ideal']],
-    }
+    # Track_C_TeacherMode.txt now contains rich diagnostic columns!
+    with open(os.path.join(out_dir, 'Track_A_GroundTruth.txt'), 'w') as f:
+        f.write("#frame,x,y,zone\n")
+        for i, p in enumerate(tracks['gth']):
+            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{'T' if p['is_t'] else 'TL'}\n")
 
-    for fname, pts in txt_files.items():
-        p = os.path.join(out_dir, fname)
-        with open(p, 'w') as f:
-            for x, y in pts:
-                f.write(f"{x:.3f},{y:.3f}\n")
-        print(f"Exported {fname} ({len(pts)} points)")
+    with open(os.path.join(out_dir, 'Track_B_NormalMode.txt'), 'w') as f:
+        f.write("#frame,x,y,err,zone,squal\n")
+        for i, p in enumerate(tracks['normal']):
+            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+
+    with open(os.path.join(out_dir, 'Track_C_TeacherMode.txt'), 'w') as f:
+        f.write("#frame,x,y,err,intervened,zone,squal\n")
+        for i, p in enumerate(tracks['teacher']):
+            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{1 if p['int'] else 0},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+
+    with open(os.path.join(out_dir, 'Track_D_IdealMode.txt'), 'w') as f:
+        f.write("#frame,x,y,err,zone,squal\n")
+        for i, p in enumerate(tracks['ideal']):
+            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+
+    print("Exported all 4 TXT files with detailed columns to step3_output!")
 
     # 4. Generate Preloaded HTML Viewer based on user's exact template
     html_template = """<!DOCTYPE html>
@@ -174,6 +203,8 @@ def run_export():
             const [hoverInfo, setHoverInfo] = useState(null);
             const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
             const [showInterventions, setShowInterventions] = useState(true);
+            const [forceAllInterventions, setForceAllInterventions] = useState(false);
+            const [showTextureHeatmap, setShowTextureHeatmap] = useState(true);
 
             // 初始化視窗大小與自動最適視角
             useEffect(() => {
@@ -345,11 +376,13 @@ def run_export():
                     ctx.fillStyle = '#dc2626';
                     ctx.strokeStyle = '#dc2626';
                     ctx.lineWidth = 1.2 / scale;
-                    for (let i = 0; i < track.points.length; i += 15) { // sub-sample to prevent overcrowding
+                    // 當放大到 scale >= 6 或使用者開啟 forceAllInterventions 時，逐點 100% 繪製紅叉！
+                    const step = (scale >= 6 || forceAllInterventions) ? 1 : Math.max(2, Math.floor(25 / scale));
+                    for (let i = 0; i < track.points.length; i += step) {
                         if (track.points[i].int) {
                             const px = track.points[i].x;
                             const py = track.points[i].y;
-                            const sz = 2.5 / scale;
+                            const sz = Math.max(2.0 / scale, 0.04);
                             ctx.beginPath();
                             ctx.moveTo(px - sz, py - sz); ctx.lineTo(px + sz, py + sz);
                             ctx.moveTo(px + sz, py - sz); ctx.lineTo(px - sz, py + sz);
@@ -380,6 +413,26 @@ def run_export():
                 ctx.moveTo(-15 / scale, 0); ctx.lineTo(15 / scale, 0);
                 ctx.moveTo(0, -15 / scale); ctx.lineTo(0, 15 / scale);
                 ctx.stroke();
+
+                // 若開啟 T 區熱區高亮，在底層繪製微塵區域弧帶
+                if (showTextureHeatmap && PRELOADED_TRACKS_DATA.gth) {
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(34, 197, 94, 0.35)';
+                    ctx.lineWidth = 16 / scale;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    let inT = false;
+                    PRELOADED_TRACKS_DATA.gth.forEach((pt, i) => {
+                        if (pt.is_t) {
+                            if (!inT) { ctx.moveTo(pt.x, pt.y); inT = true; }
+                            else { ctx.lineTo(pt.x, pt.y); }
+                        } else {
+                            inT = false;
+                        }
+                    });
+                    ctx.stroke();
+                    ctx.restore();
+                }
 
                 tracks.forEach(track => {
                     drawTrack(ctx, track);
@@ -412,7 +465,7 @@ def run_export():
                 });
                 ctx.restore();
 
-            }, [tracks, offset, scale, hoverInfo, canvasSize, showInterventions]);
+            }, [tracks, offset, scale, hoverInfo, canvasSize, showInterventions, forceAllInterventions, showTextureHeatmap]);
 
             useEffect(() => {
                 requestAnimationFrame(draw);
@@ -459,7 +512,7 @@ def run_export():
             const handleWheel = (e) => {
                 e.preventDefault();
                 const factor = 1 + (e.deltaY < 0 ? 0.15 : -0.15);
-                const newScale = Math.max(0.02, Math.min(scale * factor, 300));
+                const newScale = Math.max(0.02, Math.min(scale * factor, 5000));
                 const rect = canvasRef.current.getBoundingClientRect();
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
@@ -470,8 +523,8 @@ def run_export():
                 setScale(newScale);
             };
 
-            const zoomIn = () => setScale(s => Math.min(s * 1.3, 300));
-            const zoomOut = () => setScale(s => Math.max(s / 1.3, 0.02));
+            const zoomIn = () => setScale(s => Math.min(s * 1.4, 5000));
+            const zoomOut = () => setScale(s => Math.max(s / 1.4, 0.02));
             const resetView = () => {
                 const allVisiblePoints = tracks.filter(t => t.visible).flatMap(t => t.points);
                 fitViewToPoints(allVisiblePoints);
@@ -498,11 +551,22 @@ def run_export():
                                     已預載 POS1-1.raw 5,373 幀完整數據
                                 </span>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <label className="text-xs flex items-center gap-1 mr-2 text-gray-600 cursor-pointer">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <label className="text-xs flex items-center gap-1 text-gray-700 bg-gray-100 hover:bg-gray-200 px-2 py-1.5 rounded cursor-pointer border">
                                     <input type="checkbox" checked={showInterventions} onChange={e => setShowInterventions(e.target.checked)} className="rounded" />
-                                    <span>顯示 Teacher 介入標記 (紅叉)</span>
+                                    <span>Teacher 介入標記 (紅叉)</span>
                                 </label>
+                                <label className="text-xs flex items-center gap-1 text-gray-700 bg-gray-100 hover:bg-gray-200 px-2 py-1.5 rounded cursor-pointer border" title="縮小時預設抽樣以防卡頓，勾選後100%全數繪製">
+                                    <input type="checkbox" checked={forceAllInterventions} onChange={e => setForceAllInterventions(e.target.checked)} className="rounded" />
+                                    <span>強制顯示 100% 紅叉</span>
+                                </label>
+                                <label className="text-xs flex items-center gap-1 text-gray-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-1.5 rounded cursor-pointer border border-emerald-300" title="在軌跡底層以綠色弧帶標示有微塵錨點的T區">
+                                    <input type="checkbox" checked={showTextureHeatmap} onChange={e => setShowTextureHeatmap(e.target.checked)} className="rounded text-emerald-600" />
+                                    <span className="text-emerald-800 font-medium">T區 (微塵帶) 標示</span>
+                                </label>
+                                <div className="text-xs bg-gray-800 text-white font-mono px-2 py-1.5 rounded">
+                                    縮放: {scale.toFixed(1)}x
+                                </div>
                                 <button onClick={zoomOut} className="p-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-700" title="Zoom Out">{Icons.ZoomOut}</button>
                                 <button onClick={zoomIn} className="p-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-700" title="Zoom In">{Icons.ZoomIn}</button>
                                 <button onClick={resetView} className="p-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-700" title="全視角對齊">{Icons.RefreshCw}</button>
@@ -549,19 +613,31 @@ def run_export():
 
                         {/* Hover Tooltip */}
                         {hoverInfo && (
-                            <div className="absolute pointer-events-none bg-gray-900/95 text-white text-xs p-3 rounded-lg shadow-xl z-20 backdrop-blur-md border-l-4 leading-relaxed"
-                                style={{ left: Math.min(hoverInfo.screenX + 15, canvasSize.width - 200), top: Math.min(hoverInfo.screenY + 15, canvasSize.height - 120), borderColor: hoverInfo.color }}>
-                                <div className="font-bold border-b border-gray-700 pb-1 mb-1" style={{color: hoverInfo.color}}>
-                                    {hoverInfo.label}
+                            <div className="absolute pointer-events-none bg-gray-900/95 text-white text-xs p-3 rounded-lg shadow-xl z-20 backdrop-blur-md border-l-4 leading-relaxed min-w-[210px]"
+                                style={{ left: Math.min(hoverInfo.screenX + 15, canvasSize.width - 240), top: Math.min(hoverInfo.screenY + 15, canvasSize.height - 180), borderColor: hoverInfo.color }}>
+                                <div className="font-bold border-b border-gray-700 pb-1 mb-1 flex items-center justify-between" style={{color: hoverInfo.color}}>
+                                    <span>{hoverInfo.label}</span>
+                                    <span className="text-gray-400 font-mono text-[10px]">#{hoverInfo.index}</span>
                                 </div>
-                                <div>Frame 索引: #{hoverInfo.index}</div>
-                                <div>X 坐標: {hoverInfo.point.x.toFixed(2)} px</div>
-                                <div>Y 坐標: {hoverInfo.point.y.toFixed(2)} px</div>
+                                <div>X 坐標: <span className="font-mono">{hoverInfo.point.x.toFixed(3)} px</span></div>
+                                <div>Y 坐標: <span className="font-mono">{hoverInfo.point.y.toFixed(3)} px</span></div>
                                 {hoverInfo.point.err !== undefined && (
-                                    <div className="text-amber-400 font-bold">與真值誤差: {hoverInfo.point.err.toFixed(2)} px</div>
+                                    <div className="text-amber-300 font-medium">與真值誤差: <span className="font-bold font-mono">{hoverInfo.point.err.toFixed(3)} px</span></div>
                                 )}
-                                {hoverInfo.point.int && (
-                                    <div className="text-red-400 font-bold">★ Teacher 介入校正點</div>
+                                <div className="mt-1 pt-1 border-t border-gray-800">
+                                    表面區域: <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${hoverInfo.point.is_t ? 'bg-emerald-800 text-emerald-200' : 'bg-gray-800 text-gray-300'}`}>
+                                        {hoverInfo.point.is_t ? '【T區 - 有微塵】' : '【TL區 - 空白玻璃】'}
+                                    </span>
+                                </div>
+                                {hoverInfo.point.squal !== undefined && (
+                                    <div className="text-gray-300">紋理強度 (SQUAL): <span className="font-mono">{hoverInfo.point.squal}</span></div>
+                                )}
+                                {hoverInfo.point.int !== undefined && (
+                                    <div className="mt-1 font-bold">
+                                        Teacher 狀態: <span className={hoverInfo.point.int ? 'text-red-400 font-bold' : 'text-emerald-400'}>
+                                            {hoverInfo.point.int ? '★ 脫靶介入校正' : '✓ 窗口內自主追蹤'}
+                                        </span>
+                                    </div>
                                 )}
                             </div>
                         )}
