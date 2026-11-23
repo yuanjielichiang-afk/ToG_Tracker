@@ -1,0 +1,92 @@
+[
+  {
+    "raw": "POS1-1.raw",
+    "rev_frames": 5181,
+    "t_start": 170,
+    "t_end": 5351,
+    "samples": 42,
+    "speed": 0.20589439995637882,
+    "radius_px": 169.77676672293455,
+    "diameter_px": 339.5535334458691
+  },
+  {
+    "raw": "POS1-2.raw",
+    "rev_frames": 5151,
+    "t_start": 238,
+    "t_end": 5389,
+    "samples": 43,
+    "speed": 0.20615528128088303,
+    "radius_px": 169.00756574287632,
+    "diameter_px": 338.01513148575265
+  },
+  {
+    "raw": "POS1-3.raw",
+    "rev_frames": 5283,
+    "t_start": 160,
+    "t_end": 5443,
+    "samples": 35,
+    "speed": 0.20615528128088303,
+    "radius_px": 173.3385691748429,
+    "diameter_px": 346.6771383496858
+  },
+  {
+    "raw": "POS2-1.raw",
+    "rev_frames": 5189,
+    "t_start": 132,
+    "t_end": 5321,
+    "samples": 55,
+    "speed": 0.20615528128088303,
+    "radius_px": 170.25436976116973,
+    "diameter_px": 340.50873952233945
+  },
+  {
+    "raw": "POS2-2.raw",
+    "rev_frames": 5096,
+    "t_start": 118,
+    "t_end": 5214,
+    "samples": 54,
+    "speed": 0.20615528128088303,
+    "radius_px": 167.2029809795569,
+    "diameter_px": 334.4059619591138
+  },
+  {
+    "raw": "POS2-3.raw",
+    "rev_frames": 5131,
+    "t_start": 118,
+    "t_end": 5249,
+    "samples": 58,
+    "speed": 0.20615528128088303,
+    "radius_px": 168.35135310166928,
+    "diameter_px": 336.70270620333855
+  },
+  {
+    "raw": "POS3-1.raw",
+    "rev_frames": 5216,
+    "t_start": 116,
+    "t_end": 5332,
+    "samples": 61,
+    "speed": 0.20615528128088303,
+    "radius_px": 171.14025682679923,
+    "diameter_px": 342.28051365359846
+  },
+  {
+    "raw": "POS3-2.raw",
+    "rev_frames": 5195,
+    "t_start": 114,
+    "t_end": 5309,
+    "samples": 66,
+    "speed": 0.20615528128088303,
+    "radius_px": 170.45123355353184,
+    "diameter_px": 340.90246710706367
+  },
+  {
+    "raw": "POS3-3.raw",
+    "rev_frames": 5058,
+    "t_start": 152,
+    "t_end": 5210,
+    "samples": 62,
+    "speed": 0.20615528128088303,
+    "radius_px": 165.95617696126354,
+    "diameter_px": 331.9123539225271
+  }
+]

@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OPNI Raw Viewer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+            height: 100vh;
+        }
+
+        h1 { margin-bottom: 20px; font-size: 1.5rem; color: #4dabf7; }
+
+        .container {
+            background-color: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            width: 90%;
+            max-width: 1000px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .controls {
+            width: 100%;
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            background: #333;
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        input[type="file"] {
+            background: #444;
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .info-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 10px;
+            width: 100%;
+            background: #252525;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            color: #aaa;
+            border: 1px solid #3a3a3a;
+        }
+
+        .info-item span { color: #fff; font-weight: bold; }
+
+        /* 畫布容器 */
+        .canvas-wrapper {
+            position: relative;
+            background-color: #000;
+            border: 2px solid #555;
+            /* 讓容器可以捲動，如果放大倍率極大 */
+            overflow: auto; 
+            max-width: 100%;
+            max-height: 60vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 關鍵：強制像素化放大，不模糊 */
+        canvas { 
+            display: block; 
+            image-rendering: pixelated; 
+            /* 預設大小，JS 會覆蓋 */
+            width: 300px; 
+            height: 300px;
+        }
+
+        .slider-container {
+            width: 100%;
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        input[type="range"] { flex-grow: 1; cursor: pointer; }
+        
+        button {
+            background-color: #3b5bdb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #4c6ef5; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        .pixel-info {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            display: none;
+            color: #4dabf7;
+            border: 1px solid #4dabf7;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        .error-msg { 
+            color: #ff8787; 
+            background: rgba(255, 0, 0, 0.1);
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px; 
+            display: none; 
+            width: 100%;
+            text-align: center;
+            border: 1px solid #ff8787;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .normalization-stats {
+            font-size: 0.8rem;
+            color: #aaa;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>OPNI Raw File Viewer</h1>
+
+    <div class="container">
+        <div class="controls">
+            <input type="file" id="fileInput" accept=".raw,.bin,.opni">
+            
+            <div class="control-group">
+                <button id="btnPlay" disabled>播放</button>
+            </div>
+
+            <div class="control-group" title="自動將像素值拉伸至 0-255 以增強對比">
+                <input type="checkbox" id="chkNormalize" checked>
+                <label for="chkNormalize">Normalization (正規化)</label>
+            </div>
+
+            <div class="control-group">
+                <label>放大倍率: <span id="scaleVal">20</span>x</label>
+                <input type="range" id="scaleSlider" min="1" max="50" value="20" style="width: 100px;">
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <div class="info-item">Width: <span id="lblWidth">-</span></div>
+            <div class="info-item">Height: <span id="lblHeight">-</span></div>
+            <div class="info-item">Frames: <span id="lblFrames">-</span></div>
+            <div class="info-item">BitDepth: <span id="lblBitDepth">-</span></div>
+            <div class="info-item">FPS: <span id="lblFPS">-</span></div>
+        </div>
+
+        <div class="canvas-wrapper" id="canvasWrapper">
+            <canvas id="canvas"></canvas>
+            <div id="pixelInfo" class="pixel-info">x: 0, y: 0, val: 0</div>
+        </div>
+
+        <div class="slider-container">
+            <span id="frameCounter" style="min-width: 80px; text-align: right;">0 / 0</span>
+            <input type="range" id="frameSlider" min="0" max="0" value="0" disabled>
+            <span id="normStats" class="normalization-stats">Min: -, Max: -</span>
+        </div>
+
+        <div id="errorMsg" class="error-msg"></div>
+    </div>
+
+    <script>
+        const HEADER_SIZE = 128;
+        let fileData = null; // ArrayBuffer
+        let rawInfo = {};
+        let isPlaying = false;
+        let playInterval = null;
+        let scaleFactor = 20;
+
+        // UI Elements
+        const fileInput = document.getElementById('fileInput');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const frameSlider = document.getElementById('frameSlider');
+        const frameCounter = document.getElementById('frameCounter');
+        const btnPlay = document.getElementById('btnPlay');
+        const errorMsg = document.getElementById('errorMsg');
+        const pixelInfo = document.getElementById('pixelInfo');
+        const canvasWrapper = document.getElementById('canvasWrapper');
+        const scaleSlider = document.getElementById('scaleSlider');
+        const scaleVal = document.getElementById('scaleVal');
+        const chkNormalize = document.getElementById('chkNormalize');
+        const normStats = document.getElementById('normStats');
+
+        // Labels
+        const lblWidth = document.getElementById('lblWidth');
+        const lblHeight = document.getElementById('lblHeight');
+        const lblFrames = document.getElementById('lblFrames');
+        const lblBitDepth = document.getElementById('lblBitDepth');
+        const lblFPS = document.getElementById('lblFPS');
+
+        // Event Listeners
+        fileInput.addEventListener('change', handleFileSelect);
+        frameSlider.addEventListener('input', () => renderFrame(parseInt(frameSlider.value)));
+        btnPlay.addEventListener('click', togglePlay);
+        scaleSlider.addEventListener('input', updateScale);
+        chkNormalize.addEventListener('change', () => renderFrame(parseInt(frameSlider.value)));
+
+        // Pixel Inspection
+        canvas.addEventListener('mousemove', (e) => {
+            if (!rawInfo.width) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            // 計算滑鼠在 Canvas 上的相對位置，並除以當前顯示大小算出原始座標
+            const x = Math.floor((e.clientX - rect.left) / (rect.width / rawInfo.width));
+            const y = Math.floor((e.clientY - rect.top) / (rect.height / rawInfo.height));
+
+            if (x >= 0 && x < rawInfo.width && y >= 0 && y < rawInfo.height) {
+                const val = getPixelValue(parseInt(frameSlider.value), x, y);
+                pixelInfo.style.display = 'block';
+                pixelInfo.innerText = `x: ${x}, y: ${y}, Val: ${val}`;
+            }
+        });
+
+        canvasWrapper.addEventListener('mouseleave', () => {
+            pixelInfo.style.display = 'none';
+        });
+
+        function resetUI() {
+            if (playInterval) clearInterval(playInterval);
+            isPlaying = false;
+            btnPlay.innerText = "播放";
+            btnPlay.disabled = true;
+            frameSlider.disabled = true;
+            frameSlider.value = 0;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            errorMsg.style.display = 'none';
+            errorMsg.innerText = '';
+            lblWidth.innerText = '-';
+            lblHeight.innerText = '-';
+            lblFrames.innerText = '-';
+            lblBitDepth.innerText = '-';
+            lblFPS.innerText = '-';
+            normStats.innerText = 'Min: -, Max: -';
+        }
+
+        function updateScale() {
+            scaleFactor = parseInt(scaleSlider.value);
+            scaleVal.innerText = scaleFactor;
+            if (rawInfo.width && rawInfo.height) {
+                applyCanvasSize();
+            }
+        }
+
+        function applyCanvasSize() {
+            // CSS 尺寸 (顯示尺寸) = 原始尺寸 * 倍率
+            const displayW = rawInfo.width * scaleFactor;
+            const displayH = rawInfo.height * scaleFactor;
+            
+            // 設定 Canvas 的 CSS 大小
+            canvas.style.width = `${displayW}px`;
+            canvas.style.height = `${displayH}px`;
+        }
+
+        function handleFileSelect(evt) {
+            resetUI();
+            const file = evt.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                fileData = e.target.result;
+                parseHeader(fileData);
+            };
+            reader.onerror = function() {
+                showError("無法讀取檔案");
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function showError(msg) {
+            errorMsg.innerText = msg;
+            errorMsg.style.display = 'block';
+        }
+
+        function parseHeader(buffer) {
+            if (buffer.byteLength < HEADER_SIZE) {
+                showError("檔案太小，無法讀取檔頭");
+                return;
+            }
+
+            const dv = new DataView(buffer);
+
+            // 1. Signature check: 'O', 'P', 'N', 'I'
+            const sig = [
+                String.fromCharCode(dv.getUint8(0)),
+                String.fromCharCode(dv.getUint8(1)),
+                String.fromCharCode(dv.getUint8(2)),
+                String.fromCharCode(dv.getUint8(3))
+            ].join('');
+
+            if (sig !== 'OPNI') {
+                showError("檔案格式錯誤: Header Signature 不是 'OPNI'");
+                return;
+            }
+
+            // 2. Read Metadata (Little Endian)
+            // 參考 RawFileIO.h 結構
+            rawInfo = {
+                version: dv.getUint16(4, true),
+                width: dv.getUint16(6, true),
+                height: dv.getUint16(8, true),
+                frameSize: dv.getUint16(10, true),
+                frameNumbers: dv.getUint32(12, true),
+                // skip testType(2), liftHeight(2), inchPerSec(4), G(4) -> offset 28
+                fps: dv.getUint16(28, true),
+                bitDepth: dv.getUint16(30, true)
+            };
+
+            // Basic Validation
+            const bytesPerPixel = Math.floor((rawInfo.bitDepth + 7) / 8);
+            const expectedDataSize = rawInfo.width * rawInfo.height * bytesPerPixel;
+            
+            // OPNI Frame Format: [Count 4B] [Pixels...] [Footer 4B] = data + 8
+            if (rawInfo.frameSize !== expectedDataSize + 8) {
+                console.warn(`FrameSize warning: Header says ${rawInfo.frameSize}, calculated ${expectedDataSize + 8}`);
+            }
+
+            // Update UI
+            lblWidth.innerText = rawInfo.width;
+            lblHeight.innerText = rawInfo.height;
+            lblFrames.innerText = rawInfo.frameNumbers;
+            lblBitDepth.innerText = rawInfo.bitDepth;
+            lblFPS.innerText = rawInfo.fps;
+
+            // Canvas 解析度設為「原始解析度」，瀏覽器會負責放大顯示
+            canvas.width = rawInfo.width;
+            canvas.height = rawInfo.height;
+
+            applyCanvasSize();
+
+            frameSlider.max = rawInfo.frameNumbers - 1;
+            frameSlider.disabled = false;
+            btnPlay.disabled = false;
+
+            // Render first frame
+            renderFrame(0);
+        }
+
+        function getFrameDataOffset(frameIndex) {
+            return HEADER_SIZE + frameIndex * rawInfo.frameSize;
+        }
+
+        function getPixelValue(frameIndex, x, y) {
+            if (!fileData) return 0;
+            const offset = getFrameDataOffset(frameIndex);
+            
+            // Frame structure: [FrameCount 4B] [Pixels...] [Checksum/AE...]
+            // Pixel data starts at offset + 4
+            const pixelDataStart = offset + 4;
+            const pixelIndex = y * rawInfo.width + x;
+            const bytesPerPixel = Math.floor((rawInfo.bitDepth + 7) / 8);
+            
+            const dv = new DataView(fileData);
+            const pixelPos = pixelDataStart + pixelIndex * bytesPerPixel;
+
+            // Safety check
+            if (pixelPos + bytesPerPixel > fileData.byteLength) return 0;
+
+            if (bytesPerPixel === 1) {
+                return dv.getUint8(pixelPos);
+            } else {
+                return dv.getUint16(pixelPos, true); // Little Endian
+            }
+        }
+
+        function renderFrame(index) {
+            if (!fileData || index >= rawInfo.frameNumbers) return;
+
+            frameCounter.innerText = `${index + 1} / ${rawInfo.frameNumbers}`;
+            
+            const ctxImgData = ctx.createImageData(rawInfo.width, rawInfo.height);
+            const data = ctxImgData.data; // RGBA Uint8ClampedArray
+            
+            const offset = getFrameDataOffset(index);
+            const pixelDataStart = offset + 4;
+            const bytesPerPixel = Math.floor((rawInfo.bitDepth + 7) / 8);
+            const totalPixels = rawInfo.width * rawInfo.height;
+
+            const dv = new DataView(fileData);
+            
+            // 第一步：讀取所有像素值並計算 Min/Max (為了 Normalization)
+            let framePixels = new Int32Array(totalPixels);
+            let minVal = Infinity;
+            let maxVal = -Infinity;
+
+            for (let i = 0; i < totalPixels; i++) {
+                let val = 0;
+                let pos = pixelDataStart + i * bytesPerPixel;
+
+                // Safety check
+                if (pos >= fileData.byteLength) break;
+
+                if (bytesPerPixel === 1) {
+                    val = dv.getUint8(pos);
+                } else {
+                    val = dv.getUint16(pos, true);
+                }
+                framePixels[i] = val;
+                
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+            }
+
+            // 更新統計顯示
+            normStats.innerText = `Min: ${minVal}, Max: ${maxVal}`;
+
+            // 準備 Normalization 參數
+            const doNormalize = chkNormalize.checked;
+            let range = maxVal - minVal;
+            if (range === 0) range = 1; // 避免除以零
+
+            // 一般位移 (當不使用 Normalization 時)
+            // 8bit -> shift 0, 10bit -> shift 2, 12bit -> shift 4...
+            const shift = rawInfo.bitDepth > 8 ? (rawInfo.bitDepth - 8) : 0;
+
+            // 第二步：填入 Canvas Data
+            for (let i = 0; i < totalPixels; i++) {
+                let val = framePixels[i];
+                let displayVal = 0;
+
+                if (doNormalize) {
+                    // Min-Max Normalization: (val - min) / (max - min) * 255
+                    displayVal = Math.floor(((val - minVal) / range) * 255);
+                } else {
+                    // 原始數值位移顯示
+                    displayVal = val >> shift;
+                }
+
+                // Draw Grayscale
+                const stride = i * 4;
+                data[stride]     = displayVal; // R
+                data[stride + 1] = displayVal; // G
+                data[stride + 2] = displayVal; // B
+                data[stride + 3] = 255;        // Alpha
+            }
+
+            ctx.putImageData(ctxImgData, 0, 0);
+        }
+
+        function togglePlay() {
+            if (isPlaying) {
+                clearInterval(playInterval);
+                isPlaying = false;
+                btnPlay.innerText = "播放";
+            } else {
+                isPlaying = true;
+                btnPlay.innerText = "暫停";
+                const fps = rawInfo.fps > 0 ? rawInfo.fps : 30; // 預設 30 FPS 或讀取檔案 FPS
+                const interval = 1000 / fps; 
+
+                playInterval = setInterval(() => {
+                    let next = parseInt(frameSlider.value) + 1;
+                    if (next >= rawInfo.frameNumbers) next = 0; // Loop
+                    frameSlider.value = next;
+                    renderFrame(next);
+                }, interval); 
+            }
+        }
+    </script>
+</body>
+</html>

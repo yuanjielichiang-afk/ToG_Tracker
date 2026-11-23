@@ -1,0 +1,51 @@
+{
+  "overall": {
+    "subset_name": "全序列 (All 5373 Frames)",
+    "total_frames": 5373,
+    "pred_correct_count": 160,
+    "pred_correct_rate_pct": 2.98,
+    "match_correct_025_count": 3929,
+    "match_correct_025_rate_pct": 73.12,
+    "match_correct_050_count": 4518,
+    "match_correct_050_rate_pct": 84.09,
+    "match_correct_100_count": 5307,
+    "match_correct_100_rate_pct": 98.77,
+    "both_pred_and_match_050_count": 158,
+    "both_pred_and_match_050_rate_pct": 2.94,
+    "mean_disp_err_px": 0.2261,
+    "rmse_disp_err_px": 0.328
+  },
+  "active_motion": {
+    "subset_name": "主動圓周運動區 (Active Motion 5181 Frames)",
+    "total_frames": 5182,
+    "pred_correct_count": 0,
+    "pred_correct_rate_pct": 0.0,
+    "match_correct_025_count": 3743,
+    "match_correct_025_rate_pct": 72.23,
+    "match_correct_050_count": 4331,
+    "match_correct_050_rate_pct": 83.58,
+    "match_correct_100_count": 5116,
+    "match_correct_100_rate_pct": 98.73,
+    "both_pred_and_match_050_count": 0,
+    "both_pred_and_match_050_rate_pct": 0.0,
+    "mean_disp_err_px": 0.2325,
+    "rmse_disp_err_px": 0.3332
+  },
+  "textured_zones": {
+    "subset_name": "主動運動 + 有微塵特徵區 (Textured / Dust)",
+    "total_frames": 5182,
+    "pred_correct_count": 0,
+    "pred_correct_rate_pct": 0.0,
+    "match_correct_025_count": 3743,
+    "match_correct_025_rate_pct": 72.23,
+    "match_correct_050_count": 4331,
+    "match_correct_050_rate_pct": 83.58,
+    "match_correct_100_count": 5116,
+    "match_correct_100_rate_pct": 98.73,
+    "both_pred_and_match_050_count": 0,
+    "both_pred_and_match_050_rate_pct": 0.0,
+    "mean_disp_err_px": 0.2325,
+    "rmse_disp_err_px": 0.3332
+  },
+  "textureless_zones": {}
+}

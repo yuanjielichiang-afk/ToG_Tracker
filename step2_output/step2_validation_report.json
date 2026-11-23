@@ -1,0 +1,20 @@
+{
+  "total_frames": 5373,
+  "fps": 82,
+  "active_interval": [
+    170,
+    5351
+  ],
+  "active_length_frames": 5181,
+  "omega_rad_per_frame": 0.0012127360175988393,
+  "deg_per_frame": 0.06948465547191662,
+  "period_frames": 5181.0,
+  "period_seconds": 63.18292682926829,
+  "radius_px": 169.77676672293455,
+  "speed_px_per_frame": 0.20589439995637882,
+  "radius_counts": 207.00219813412534,
+  "speed_counts_per_frame": 0.251039021399385,
+  "total_tested_clusters": 24,
+  "loop_closure_error_px": 1.278404932596954e-12,
+  "angle_fit_rmse_deg": 204.234918945182
+}
