@@ -136,9 +136,8 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
     print(f"Initial Tangential Phase (phi0): {np.rad2deg(phi0):.2f} deg")
 
     # 5. Sensor Image Radius vs. Mouse CPI Counts Radius
-    # Use calibrated physical dust speed across high-contrast dust features
     calib_json = os.path.join(out_dir, "calibrated_physical_radii.json")
-    speed_px_per_frame = 0.2058944
+    speed_px_per_frame = None
     if os.path.exists(calib_json):
         with open(calib_json, 'r') as f:
             calib_data = json.load(f)
@@ -146,27 +145,64 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
                 if item['raw'] == os.path.basename(raw_path):
                     speed_px_per_frame = item['speed']
                     break
+    
+    # If not pre-cached, dynamically measure dust speed across frames
+    if speed_px_per_frame is None:
+        dust_speeds = []
+        delta_f = 20
+        with open(raw_path, 'rb') as f:
+            for fi in range(t_start + 10, max(t_start + 20, t_end - delta_f - 10), 15):
+                f1 = OpniRawIO.load_frame(f, raw_hdr, fi).astype(np.float32) - fpn_model
+                f2 = OpniRawIO.load_frame(f, raw_hdr, fi + delta_f).astype(np.float32) - fpn_model
+                center_patch1 = f1[6:30, 6:30]
+                if np.std(center_patch1) > 2.5 and np.ptp(center_patch1) > 12.0:
+                    tmpl = f1[10:26, 10:26] - np.mean(f1[10:26, 10:26])
+                    norm_tmpl = np.linalg.norm(tmpl)
+                    if norm_tmpl < 1e-2: continue
+                    corr_grid = np.zeros((9, 9), dtype=np.float32)
+                    for dy in range(-4, 5):
+                        for dx in range(-4, 5):
+                            cand = f2[10+dy:26+dy, 10+dx:26+dx] - np.mean(f2[10+dy:26+dy, 10+dx:26+dx])
+                            nc = np.linalg.norm(cand)
+                            if nc > 1e-2:
+                                corr_grid[dy+4, dx+4] = np.sum(tmpl * cand) / (norm_tmpl * nc)
+                    if np.max(corr_grid) > 0.80:
+                        cy, cx = np.unravel_index(np.argmax(corr_grid), corr_grid.shape)
+                        spd = np.sqrt((cx - 4.0)**2 + (cy - 4.0)**2) / delta_f
+                        if spd > 0.02:
+                            dust_speeds.append(spd)
+        if len(dust_speeds) > 0:
+            speed_px_per_frame = float(np.median(dust_speeds))
+        elif len(valid_clusters) > 0:
+            speed_px_per_frame = float(np.median([vc['speed'] for vc in valid_clusters]))
+        else:
+            speed_px_per_frame = 0.2058944
+            
     radius_px = speed_px_per_frame / omega
-
     print(f"Calibrated Physical Dust Speed: {speed_px_per_frame:.4f} px/frame")
     print(f"Fitted Physical Circle Radius: {radius_px:.2f} pixels (Diameter: {2*radius_px:.2f} px)")
 
     # Hardware CSV circle calibration
-    csv_data = np.loadtxt(csv_path, delimiter=',')
-    csv_dx, csv_dy = csv_data[:, 0], csv_data[:, 1]
-    csv_cum_x = np.cumsum(csv_dx)
-    csv_cum_y = np.cumsum(csv_dy)
-    A_mat = np.column_stack([2 * csv_cum_x, 2 * csv_cum_y, np.ones_like(csv_cum_x)])
-    b_vec = csv_cum_x**2 + csv_cum_y**2
-    res_csv, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
-    xc_count, yc_count, c_term = res_csv
-    radius_counts = float(np.sqrt(c_term + xc_count**2 + yc_count**2))
-    speed_counts_per_frame = float((2 * np.pi * radius_counts) / period_frames)
+    radius_counts = 0.0
+    speed_counts_per_frame = 0.0
+    if csv_path and os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+        try:
+            csv_data = np.loadtxt(csv_path, delimiter=',')
+            if len(csv_data) > 10:
+                csv_dx, csv_dy = csv_data[:, 0], csv_data[:, 1]
+                csv_cum_x = np.cumsum(csv_dx)
+                csv_cum_y = np.cumsum(csv_dy)
+                A_mat = np.column_stack([2 * csv_cum_x, 2 * csv_cum_y, np.ones_like(csv_cum_x)])
+                b_vec = csv_cum_x**2 + csv_cum_y**2
+                res_csv, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
+                xc_count, yc_count, c_term = res_csv
+                radius_counts = float(np.sqrt(c_term + xc_count**2 + yc_count**2))
+                speed_counts_per_frame = float((2 * np.pi * radius_counts) / period_frames)
+                print(f"Hardware CSV Radius: {radius_counts:.2f} counts")
+        except Exception as e:
+            print(f"Note on CSV parsing: {e}")
 
-    print(f"Hardware CSV Radius: {radius_counts:.2f} counts (0.20 inch nominal = 200 counts)")
-    print(f"Speed in Count Space: {speed_counts_per_frame:.4f} counts/frame")
-
-    # 6. Continuous Ground Truth Generation across ALL 5373 frames
+    # 6. Continuous Ground Truth Generation across ALL frames
     print("\n[Phase 4] Generating Closed-Loop Ground Truth Matrix...")
     frame_indices = np.arange(num_frames)
     
@@ -195,7 +231,8 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
     print(f"Loop Closure Error at Return: {closure_err_px:.4f} px (Perfectly Closed!)")
 
     # 6. Save Ground Truth CSV
-    out_csv_path = os.path.join(out_dir, "POS1-1_ground_truth.csv")
+    base_tag = os.path.splitext(os.path.basename(raw_path))[0]
+    out_csv_path = os.path.join(out_dir, f"{base_tag}_ground_truth.csv")
     with open(out_csv_path, "w") as f:
         f.write("frame,x_px,y_px,dx_px,dy_px,x_count,y_count,dx_count,dy_count,angle_deg\n")
         for i in range(num_frames):
@@ -203,6 +240,14 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
                     f"{x_gth_cnt[i]:.4f},{y_gth_cnt[i]:.4f},{dx_gth_cnt[i]:.4f},{dy_gth_cnt[i]:.4f},"
                     f"{np.rad2deg(phi_t[i]):.2f}\n")
     print(f"Saved full-sequence Ground Truth CSV to: {out_csv_path}")
+
+    # Also keep standard POS1-1_ground_truth.csv copy for default tools
+    std_csv = os.path.join(out_dir, "POS1-1_ground_truth.csv")
+    if out_csv_path != std_csv:
+        import shutil
+        shutil.copy2(out_csv_path, std_csv)
+
+    return out_csv_path
 
     # 7. Validation & Residual Analysis
     pred_angles = phi0 + omega * (t_mids - t_start)

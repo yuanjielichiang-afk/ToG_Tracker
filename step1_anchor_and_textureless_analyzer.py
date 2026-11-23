@@ -285,6 +285,9 @@ def analyze_raw(raw_path, out_dir):
         plt.close()
         print(f"Saved sample comparison plot to {sample_path}")
 
+# Export alias for pipeline compatibility
+run_step1 = analyze_raw
+
 if __name__ == '__main__':
     raw_file = r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw"
     output_directory = r"C:\Users\Shouder Wei\.gemini\antigravity\scratch\tog_tracker\step1_output"

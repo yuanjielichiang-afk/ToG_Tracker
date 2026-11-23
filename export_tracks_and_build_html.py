@@ -7,11 +7,15 @@ sys.path.append(r'C:\PROJECT\ToG_Tracker')
 from step1_anchor_and_textureless_analyzer import OpniRawIO
 from tracker_core import NormalModeTracker, TeacherModeTracker, IdealModeTracker
 
-def run_export():
-    raw_path = r'C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw'
-    gth_csv_path = r'C:\PROJECT\ToG_Tracker\step2_output\POS1-1_ground_truth.csv'
-    fpn_path = r'C:\PROJECT\ToG_Tracker\step1_output\fpn_model.raw'
-    out_dir = r'C:\PROJECT\ToG_Tracker\step3_output'
+def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None):
+    if raw_path is None:
+        raw_path = r'C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw'
+    if gth_csv_path is None:
+        gth_csv_path = r'C:\PROJECT\ToG_Tracker\step2_output\POS1-1_ground_truth.csv'
+    if fpn_path is None:
+        fpn_path = r'C:\PROJECT\ToG_Tracker\step1_output\fpn_model.raw'
+    if out_dir is None:
+        out_dir = r'C:\PROJECT\ToG_Tracker\step3_output'
     os.makedirs(out_dir, exist_ok=True)
 
     print("Loading Ground Truth and Raw Data...")
