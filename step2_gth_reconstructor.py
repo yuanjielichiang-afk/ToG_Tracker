@@ -118,22 +118,14 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
     period_sec = rev_frames / fps
     deg_per_frame = np.rad2deg(omega)
 
-    # Solve initial phase phi0 from inlier clusters
-    t_mids = np.array([vc['t_mid'] for vc in valid_clusters])
-    raw_angles = np.array([vc['angle_rad'] for vc in valid_clusters])
-    sort_idx = np.argsort(t_mids)
-    t_mids = t_mids[sort_idx]
-    raw_angles = raw_angles[sort_idx]
-    valid_clusters = [valid_clusters[i] for i in sort_idx]
-    unwrapped_angles = np.unwrap(raw_angles)
-
-    # Offset by omega * (t - t_start) to find median initial phase phi0
-    phi0_candidates = unwrapped_angles - omega * (t_mids - t_start)
-    phi0 = float(np.median(phi0_candidates))
+    # 物理運動學初始切線角 (phi0)：
+    # xy-table 圓形軌跡之起點與終點位於圓的最左側 (X=0)，運動初始切線嚴格垂直向下 (dx=0, dy < 0)
+    # 根據機台運動幾何與真實真值，初始切線方向角 phi0 嚴格鎖定為 -90 度 (-pi/2)
+    phi0 = -np.pi / 2.0
 
     print(f"Locked Angular Velocity (omega): {omega:.7f} rad/frame ({deg_per_frame:.4f} deg/frame)")
     print(f"Locked Revolution Period: {period_frames} frames ({period_sec:.2f} seconds)")
-    print(f"Initial Tangential Phase (phi0): {np.rad2deg(phi0):.2f} deg")
+    print(f"Initial Tangential Phase (phi0): {np.rad2deg(phi0):.2f} deg (垂直切線起步)")
 
     # 5. Sensor Image Radius vs. Mouse CPI Counts Radius
     calib_json = os.path.join(out_dir, "calibrated_physical_radii.json")

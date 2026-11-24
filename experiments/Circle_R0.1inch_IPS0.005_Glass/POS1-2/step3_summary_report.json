@@ -1,41 +1,41 @@
 {
   "normal": {
     "total_frames": 9163,
-    "final_drift_px": 47.683782911384036,
-    "max_ate_px": 76.08508863161033,
-    "mean_ate_px": 58.913040306836265,
-    "in_basin_rate_all": 1.3205282112845138,
-    "in_basin_rate_texture_zone": 1.3205282112845138,
+    "final_drift_px": 47.68863203112456,
+    "max_ate_px": 72.45377090014017,
+    "mean_ate_px": 40.19230842179956,
+    "in_basin_rate_all": 2.510094947069737,
+    "in_basin_rate_texture_zone": 2.510094947069737,
     "mismatch_interventions_count": 0,
-    "inst_dx_rmse_px": 0.1651888297493853,
-    "inst_dy_rmse_px": 0.16897453901947426,
-    "inst_speed_rmse_px": 0.2363043467878135,
-    "inst_speed_rmse_textured_px": 0.2363043467878135
+    "inst_dx_rmse_px": 0.16536080609801843,
+    "inst_dy_rmse_px": 0.16952148568519654,
+    "inst_speed_rmse_px": 0.23681581514396952,
+    "inst_speed_rmse_textured_px": 0.23681581514396952
   },
   "teacher": {
     "total_frames": 9163,
-    "final_drift_px": 0.7901401711088988,
-    "max_ate_px": 2.9356918860806895,
-    "mean_ate_px": 1.366692645272043,
-    "in_basin_rate_all": 22.907344756084253,
-    "in_basin_rate_texture_zone": 22.907344756084253,
-    "mismatch_interventions_count": 7064,
-    "inst_dx_rmse_px": 0.39882131388674047,
-    "inst_dy_rmse_px": 0.35055151841362425,
-    "inst_speed_rmse_px": 0.5309847525799998,
-    "inst_speed_rmse_textured_px": 0.5309847525799998
+    "final_drift_px": 1.6486737093797545,
+    "max_ate_px": 3.1733777351585473,
+    "mean_ate_px": 1.3488999534193138,
+    "in_basin_rate_all": 24.06417112299465,
+    "in_basin_rate_texture_zone": 24.06417112299465,
+    "mismatch_interventions_count": 6958,
+    "inst_dx_rmse_px": 0.309389860097159,
+    "inst_dy_rmse_px": 0.36235337723327565,
+    "inst_speed_rmse_px": 0.4764683153403804,
+    "inst_speed_rmse_textured_px": 0.4764683153403804
   },
   "ideal": {
     "total_frames": 9163,
-    "final_drift_px": 1.2788555391442773,
-    "max_ate_px": 2.098976455322927,
-    "mean_ate_px": 1.2283948056059033,
+    "final_drift_px": 1.2434830115445887,
+    "max_ate_px": 2.1115626535814633,
+    "mean_ate_px": 1.292760829641196,
     "in_basin_rate_all": 100.0,
     "in_basin_rate_texture_zone": 100.0,
     "mismatch_interventions_count": 0,
-    "inst_dx_rmse_px": 0.19186746375369926,
-    "inst_dy_rmse_px": 0.17000380968120227,
-    "inst_speed_rmse_px": 0.25634823766392373,
-    "inst_speed_rmse_textured_px": 0.25634823766392373
+    "inst_dx_rmse_px": 0.16083053082117624,
+    "inst_dy_rmse_px": 0.17377617316138647,
+    "inst_speed_rmse_px": 0.23677968241138744,
+    "inst_speed_rmse_textured_px": 0.23677968241138744
   }
 }
