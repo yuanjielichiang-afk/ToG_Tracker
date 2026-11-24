@@ -80,6 +80,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
             end = max(0, min(num_frames - 1, c['end']))
             is_anchor[start: end + 1] = True
 
+    search_radius = 2 if (raw_hdr.get('width', 36) >= 64 or '4ips' in raw_path.lower()) else 1
+
     tracks = {}
     
     # 1. Ground truth track points
@@ -94,7 +96,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
 
     # 2. Simulate the 3 modes using tracker_core
     print("Simulating Mode: NORMAL...")
-    tracker_norm = NormalModeTracker(search_radius=1, subpixel_scale=16, 
+    tracker_norm = NormalModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                      fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     norm_pts = []
@@ -117,7 +119,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     tracks['normal'] = norm_pts
 
     print("Simulating Mode: TEACHER...")
-    tracker_teach = TeacherModeTracker(search_radius=1, subpixel_scale=16, 
+    tracker_teach = TeacherModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                        keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                        fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     teach_pts = []
@@ -139,7 +141,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     tracks['teacher'] = teach_pts
 
     print("Simulating Mode: IDEAL...")
-    tracker_ideal = IdealModeTracker(search_radius=1, subpixel_scale=16, 
+    tracker_ideal = IdealModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                      fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     ideal_pts = []

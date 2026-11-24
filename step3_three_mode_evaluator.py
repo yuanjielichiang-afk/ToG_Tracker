@@ -35,6 +35,10 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     use_corner_filter = 'mousepad' in raw_path.lower() or 'mousepad' in out_dir.lower()
     if use_corner_filter:
         print("[OptNavi] 啟用 4-Corner 角度紋理對齊濾波器 (打破滑鼠墊經緯編織 repeat pattern)")
+        
+    # 動態自適應搜尋半徑：對於高解析度或高速序列 (如 FAMS 64x64 或 4 ips)，使用 search_radius=2 (5x5 窗口)
+    search_radius = 2 if (raw_hdr.get('width', 36) >= 64 or '4ips' in raw_path.lower()) else 1
+    print(f"動態搜尋半徑: {search_radius} (窗口: {2*search_radius+1}x{2*search_radius+1})")
     print(f"Evaluating {num_frames} frames under: Normal, Teacher, and Ideal modes...")
 
     # Preload frames
@@ -49,7 +53,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 1. Normal Mode
     print("\nRunning Mode: NORMAL...")
-    normal_tracker = NormalModeTracker(search_radius=1, subpixel_scale=16, 
+    normal_tracker = NormalModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                        keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                        fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     normal_records = []
@@ -73,7 +77,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 2. Teacher Mode
     print("\nRunning Mode: TEACHER...")
-    teacher_tracker = TeacherModeTracker(search_radius=1, subpixel_scale=16, 
+    teacher_tracker = TeacherModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                          keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                          fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     teacher_records = []
@@ -89,7 +93,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 3. Ideal Mode
     print("\nRunning Mode: IDEAL...")
-    ideal_tracker = IdealModeTracker(search_radius=1, subpixel_scale=16, 
+    ideal_tracker = IdealModeTracker(search_radius=search_radius, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                                      fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     ideal_records = []

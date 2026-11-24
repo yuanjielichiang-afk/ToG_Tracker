@@ -38,24 +38,45 @@ def run_step2(raw_path, csv_path, step1_dir, out_dir):
     with open(raw_path, 'rb') as f:
         f0 = OpniRawIO.load_frame(f, raw_hdr, 0).astype(np.float32)
         
-        # Scan forward for start of motion (where difference from f0 rises above noise)
+        # 採樣前導幀估算感測器環境底噪 (Noise Baseline)
+        noise_samples = [np.mean(np.abs(OpniRawIO.load_frame(f, raw_hdr, k).astype(np.float32) - f0)) for k in range(2, min(50, num_frames), 2)]
+        base_noise = float(np.mean(noise_samples))
+        noise_std = float(np.std(noise_samples))
+        threshold = base_noise + max(1.5, 3.0 * noise_std + 1.0)
+        
+        # 前向自適應掃描運動起步點 (t_start)
         t_start = 0
-        for fi in range(0, min(500, num_frames), 2):
+        scan_limit = min(5000, num_frames)
+        for fi in range(0, scan_limit, 5):
             frm = OpniRawIO.load_frame(f, raw_hdr, fi).astype(np.float32)
-            if np.mean(np.abs(frm - f0)) > 1.2:
-                t_start = fi
+            if np.mean(np.abs(frm - f0)) > threshold:
+                for sub in range(max(0, fi - 6), fi + 1):
+                    sf = OpniRawIO.load_frame(f, raw_hdr, sub).astype(np.float32)
+                    if np.mean(np.abs(sf - f0)) > threshold:
+                        t_start = sub
+                        break
                 break
                 
-        # Find exact loop closure near the end (search last 800 frames)
-        search_start = max(0, num_frames - 800)
+        # 後向掃描閉環回到原點幀 (t_end)
+        search_start = max(t_start + 500, num_frames - max(800, int(num_frames * 0.25)))
         sads = []
-        for fi in range(search_start, num_frames):
+        for fi in range(search_start, num_frames, 2):
             frm = OpniRawIO.load_frame(f, raw_hdr, fi).astype(np.float32)
-            sad = np.mean(np.abs(frm - f0))
+            sad = float(np.mean(np.abs(frm - f0)))
             sads.append((fi, sad))
             
     sads.sort(key=lambda x: x[1])
     t_end, min_sad = sads[0]
+    
+    # 精細尋優 t_end
+    with open(raw_path, 'rb') as f:
+        for fi in range(max(0, t_end - 6), min(num_frames, t_end + 7)):
+            frm = OpniRawIO.load_frame(f, raw_hdr, fi).astype(np.float32)
+            sad = float(np.mean(np.abs(frm - f0)))
+            if sad < min_sad:
+                min_sad = sad
+                t_end = fi
+                
     rev_frames = t_end - t_start
 
     print(f"Motion Start (t_start): Frame {t_start}")

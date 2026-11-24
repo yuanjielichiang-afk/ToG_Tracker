@@ -39,12 +39,17 @@ class OpniRawIO:
         if len(raw) < header['frame_size']:
             return None
         w, h = header['width'], header['height']
-        pixels = np.frombuffer(raw[4: 4 + w * h], dtype=np.uint8)
+        bit_depth = header.get('bit_depth', 8)
+        if bit_depth > 8 or header['frame_size'] >= (4 + w * h * 2):
+            pixels = np.frombuffer(raw[4: 4 + w * h * 2], dtype=np.uint16)
+        else:
+            pixels = np.frombuffer(raw[4: 4 + w * h], dtype=np.uint8)
         return pixels.reshape((h, w))
 
     @staticmethod
     def write_raw(filepath, frames, width, height, fps=30, bit_depth=8):
-        frame_size = 4 + width * height + 4
+        bytes_per_pix = 2 if bit_depth > 8 else 1
+        frame_size = 4 + width * height * bytes_per_pix + 4
         num_frames = len(frames)
         header = bytearray(OpniRawIO.HEADER_SIZE)
         header[:4] = b'OPNI'
@@ -56,11 +61,14 @@ class OpniRawIO:
         struct.pack_into('<H', header, 28, fps)         # fps
         struct.pack_into('<H', header, 30, bit_depth)   # bit_depth
 
+        max_val = (1 << bit_depth) - 1
+        dtype = np.uint16 if bit_depth > 8 else np.uint8
+
         with open(filepath, 'wb') as f:
             f.write(header)
             for idx, frame in enumerate(frames):
                 f.write(struct.pack('<I', idx))
-                clipped = np.clip(frame, 0, 255).astype(np.uint8)
+                clipped = np.clip(frame, 0, max_val).astype(dtype)
                 f.write(clipped.tobytes())
                 f.write(struct.pack('<I', 0)) # footer
 
@@ -89,7 +97,7 @@ def analyze_raw(raw_path, out_dir):
 
     # Save FPN model as raw and PNG
     fpn_raw_path = os.path.join(out_dir, "fpn_model.raw")
-    OpniRawIO.write_raw(fpn_raw_path, [fpn_model], w, h, fps=header['fps'])
+    OpniRawIO.write_raw(fpn_raw_path, [fpn_model], w, h, fps=header['fps'], bit_depth=header.get('bit_depth', 8))
     
     plt.figure(figsize=(6, 5))
     plt.imshow(fpn_model, cmap='gray')
@@ -172,11 +180,11 @@ def analyze_raw(raw_path, out_dir):
 
     # Save Textureless RAW file
     tl_raw_path = os.path.join(out_dir, "textureless_extracted.raw")
-    OpniRawIO.write_raw(tl_raw_path, textureless_frames, w, h, fps=header['fps'])
+    OpniRawIO.write_raw(tl_raw_path, textureless_frames, w, h, fps=header['fps'], bit_depth=header.get('bit_depth', 8))
 
     # Save Anchor RAW file
     anchor_raw_path = os.path.join(out_dir, "anchor_extracted.raw")
-    OpniRawIO.write_raw(anchor_raw_path, anchor_frames, w, h, fps=header['fps'])
+    OpniRawIO.write_raw(anchor_raw_path, anchor_frames, w, h, fps=header['fps'], bit_depth=header.get('bit_depth', 8))
 
     # Find Anchor Clusters (consecutive frames with anchor features)
     clusters = []

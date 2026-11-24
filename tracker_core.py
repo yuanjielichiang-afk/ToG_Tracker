@@ -37,7 +37,8 @@ class NormalModeTracker:
     def __init__(self, search_radius=1, subpixel_scale=16, 
                  keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
                  fpn_model=None, max_ref_dist=6.0,
-                 use_corner_filter=False, corner_flat_bias=2.0):
+                 use_corner_filter=False, corner_flat_bias=2.0,
+                 max_phys_v=None):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
         self.keyframe_dist = keyframe_dist
@@ -47,6 +48,7 @@ class NormalModeTracker:
         self.max_ref_dist = max_ref_dist
         self.use_corner_filter = use_corner_filter
         self.corner_flat_bias = corner_flat_bias
+        self.max_phys_v = max_phys_v if max_phys_v is not None else max(0.5, self.r * 1.0)
 
         # 核心卷積核
         self.laplacian_kernel = np.array([
@@ -197,7 +199,7 @@ class NormalModeTracker:
         """
         步驟 8: 速度突波防污染過濾器 (Velocity Spike / Innovation Gate)
         """
-        max_phys_v = 0.40 # 物理最高合理幀速度 (真實值約 0.206)
+        max_phys_v = self.max_phys_v
         # 檢查是否為網格翻轉產生的突波
         diff_vx = abs(frame_dx - self.v_x)
         diff_vy = abs(frame_dy - self.v_y)
@@ -206,7 +208,7 @@ class NormalModeTracker:
         clamped_dx = max(-max_phys_v, min(max_phys_v, frame_dx))
         clamped_dy = max(-max_phys_v, min(max_phys_v, frame_dy))
         
-        if diff_vx > 0.45 or diff_vy > 0.45:
+        if diff_vx > (max_phys_v * 1.1) or diff_vy > (max_phys_v * 1.1):
             # 劇烈跳變：判定為交界翻轉突波，減小更新權重
             alpha = self.v_alpha * 0.2
         else:
