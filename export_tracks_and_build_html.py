@@ -7,7 +7,7 @@ sys.path.append(r'C:\PROJECT\ToG_Tracker')
 from step1_anchor_and_textureless_analyzer import OpniRawIO
 from tracker_core import NormalModeTracker, TeacherModeTracker, IdealModeTracker
 
-def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, step1_dir=None, exp_tag=None):
+def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, step1_dir=None, exp_tag=None, use_corner_filter=None):
     if raw_path is None:
         raw_path = r'C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw'
     if gth_csv_path is None:
@@ -23,6 +23,13 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     raw_name = os.path.basename(raw_path)
     if exp_tag is None:
         exp_tag = raw_name
+
+    if use_corner_filter is None:
+        # 對布質/有紋理滑鼠墊自動啟用 OptNavi Corner 紋理對齊過濾器
+        use_corner_filter = 'mousepad' in raw_path.lower() or 'mousepad' in exp_tag.lower()
+    
+    if use_corner_filter:
+        print("[OptNavi] 啟用 4-Corner 角度紋理對齊濾波器 (打破經緯編織 repeat pattern)")
 
     print(f"Loading Ground Truth and Raw Data for [{exp_tag}]...")
     gth_data = np.genfromtxt(gth_csv_path, delimiter=',', names=True)
@@ -79,6 +86,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     tracks['gth'] = [{
         'x': round(float(gth_x[i]), 3), 
         'y': round(float(gth_y[i]), 3),
+        'dx': round(float(gth_dx[i]), 3),
+        'dy': round(float(gth_dy[i]), 3),
         'is_t': bool(is_anchor[i]),
         'squal': 0.0
     } for i in range(num_frames)]
@@ -87,7 +96,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     print("Simulating Mode: NORMAL...")
     tracker_norm = NormalModeTracker(search_radius=1, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                     fpn_model=fpn_model)
+                                     fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     norm_pts = []
     for fi in range(num_frames):
         res = tracker_norm.step(frames[fi], fi)
@@ -97,6 +106,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
         norm_pts.append({
             'x': round(float(res['est_x']), 3),
             'y': round(float(res['est_y']), 3),
+            'dx': round(float(res['est_dx']), 3),
+            'dy': round(float(res['est_dy']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': in_basin,
             'int': False,
@@ -108,7 +119,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     print("Simulating Mode: TEACHER...")
     tracker_teach = TeacherModeTracker(search_radius=1, subpixel_scale=16, 
                                        keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                       fpn_model=fpn_model)
+                                       fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     teach_pts = []
     for fi in range(num_frames):
         g_pos = (gth_x[fi], gth_y[fi])
@@ -117,6 +128,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
         teach_pts.append({
             'x': round(float(res['est_x']), 3),
             'y': round(float(res['est_y']), 3),
+            'dx': round(float(res['est_dx']), 3),
+            'dy': round(float(res['est_dy']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': res['in_basin'],
             'int': res['teacher_intervened'],
@@ -128,7 +141,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     print("Simulating Mode: IDEAL...")
     tracker_ideal = IdealModeTracker(search_radius=1, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                     fpn_model=fpn_model)
+                                     fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     ideal_pts = []
     for fi in range(num_frames):
         g_pos = (gth_x[fi], gth_y[fi])
@@ -137,6 +150,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
         ideal_pts.append({
             'x': round(float(res['est_x']), 3),
             'y': round(float(res['est_y']), 3),
+            'dx': round(float(res['est_dx']), 3),
+            'dy': round(float(res['est_dy']), 3),
             'err': round(float(np.sqrt((res['est_x'] - gth_x[fi])**2 + (res['est_y'] - gth_y[fi])**2)), 3),
             'in_basin': True,
             'int': False,
@@ -145,30 +160,30 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
         })
     tracks['ideal'] = ideal_pts
 
-    # 3. Export separate TXT files
+    # 3. Export separate TXT files (包含單幀相對位移 dx, dy 與累積位置 x, y)
     txt_gth = os.path.join(out_dir, 'Track_A_GroundTruth.txt')
     with open(txt_gth, 'w', encoding='utf-8') as f:
-        f.write("#frame,x,y,zone\n")
+        f.write("#frame,dx,dy,x,y,zone\n")
         for i, p in enumerate(tracks['gth']):
-            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{'T' if p['is_t'] else 'TL'}\n")
+            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{'T' if p['is_t'] else 'TL'}\n")
 
     txt_norm = os.path.join(out_dir, 'Track_B_NormalMode.txt')
     with open(txt_norm, 'w', encoding='utf-8') as f:
-        f.write("#frame,x,y,err,zone,squal\n")
+        f.write("#frame,dx,dy,x,y,err,zone,squal\n")
         for i, p in enumerate(tracks['normal']):
-            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
 
     txt_teach = os.path.join(out_dir, 'Track_C_TeacherMode.txt')
     with open(txt_teach, 'w', encoding='utf-8') as f:
-        f.write("#frame,x,y,err,intervened,zone,squal\n")
+        f.write("#frame,dx,dy,x,y,err,intervened,zone,squal\n")
         for i, p in enumerate(tracks['teacher']):
-            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{1 if p['int'] else 0},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{1 if p['int'] else 0},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
 
     txt_ideal = os.path.join(out_dir, 'Track_D_IdealMode.txt')
     with open(txt_ideal, 'w', encoding='utf-8') as f:
-        f.write("#frame,x,y,err,zone,squal\n")
+        f.write("#frame,dx,dy,x,y,err,zone,squal\n")
         for i, p in enumerate(tracks['ideal']):
-            f.write(f"{i},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
 
     print(f"Exported all 4 TXT files to: {out_dir}")
 
@@ -269,7 +284,7 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                     const lines = content.split(/\\r?\\n/).map(l => l.trim()).filter(l => l.length > 0);
                     if (lines.length === 0) return callback([], file.name);
 
-                    let colX = -1, colY = -1, colErr = -1, colInt = -1, colZone = -1, colSqual = -1;
+                    let colX = -1, colY = -1, colDx = -1, colDy = -1, colErr = -1, colInt = -1, colZone = -1, colSqual = -1;
                     let startLine = 0;
 
                     // 檢查第一行是否為表頭 (Header)
@@ -280,6 +295,8 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                         headerCols.forEach((col, idx) => {
                             if (col === 'x') colX = idx;
                             else if (col === 'y') colY = idx;
+                            else if (col === 'dx') colDx = idx;
+                            else if (col === 'dy') colDy = idx;
                             else if (col === 'err') colErr = idx;
                             else if (col === 'intervened' || col === 'int') colInt = idx;
                             else if (col === 'zone') colZone = idx;
@@ -290,7 +307,14 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                     // 自適應猜測欄位
                     if (colX === -1 || colY === -1) {
                         const sampleParts = lines[startLine].split(',').map(p => p.trim());
-                        if (sampleParts.length >= 3) {
+                        if (sampleParts.length >= 5 && !isNaN(parseFloat(sampleParts[3])) && !isNaN(parseFloat(sampleParts[4]))) {
+                            // 格式: frame, dx, dy, x, y, ...
+                            colDx = 1;
+                            colDy = 2;
+                            colX = 3;
+                            colY = 4;
+                            if (sampleParts.length >= 6) colErr = 5;
+                        } else if (sampleParts.length >= 3) {
                             // 若有 3 欄以上，檢查第 0 欄是否為幀號 (整數)
                             const p0 = parseFloat(sampleParts[0]);
                             if (Number.isInteger(p0) && p0 >= 0) {
@@ -315,6 +339,12 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                             const y = parseFloat(parts[colY]);
                             if (!isNaN(x) && !isNaN(y)) {
                                 const pt = { x, y };
+                                if (colDx >= 0 && colDx < parts.length && !isNaN(parseFloat(parts[colDx]))) {
+                                    pt.dx = parseFloat(parts[colDx]);
+                                }
+                                if (colDy >= 0 && colDy < parts.length && !isNaN(parseFloat(parts[colDy]))) {
+                                    pt.dy = parseFloat(parts[colDy]);
+                                }
                                 if (colErr >= 0 && colErr < parts.length && !isNaN(parseFloat(parts[colErr]))) {
                                     pt.err = parseFloat(parts[colErr]);
                                 }
@@ -398,25 +428,46 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                 const ctx = canvas.getContext('2d');
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // 畫格線
+                // 畫刻度與格線 (自適應動態世界座標刻度尺)
                 ctx.save();
                 ctx.strokeStyle = '#e2e8f0';
+                ctx.fillStyle = '#64748b';
+                ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
                 ctx.lineWidth = 1;
-                const gridSize = 50 * scale;
-                const startX = offset.x % gridSize;
-                const startY = offset.y % gridSize;
+
+                const minPixelSpacing = 60;
+                const rawStep = minPixelSpacing / scale;
+                const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+                const residual = rawStep / magnitude;
+                let step = residual > 5 ? 10 * magnitude : residual > 2 ? 5 * magnitude : 2 * magnitude;
+                if (step <= 0) step = 1;
 
                 ctx.beginPath();
-                for (let x = startX; x < canvas.width; x += gridSize) {
-                    ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+                const startWorldX = Math.floor((-offset.x / scale) / step) * step;
+                const endWorldX = Math.ceil(((canvas.width - offset.x) / scale) / step) * step;
+                const startWorldY = Math.floor((-offset.y / scale) / step) * step;
+                const endWorldY = Math.ceil(((canvas.height - offset.y) / scale) / step) * step;
+
+                // 繪製垂直網格與 X 刻度數值
+                for (let wx = startWorldX; wx <= endWorldX; wx += step) {
+                    const sx = Math.floor(wx * scale + offset.x) + 0.5;
+                    if (sx < 0 || sx > canvas.width) continue;
+                    ctx.moveTo(sx, 0); ctx.lineTo(sx, canvas.height);
+                    const label = Number(wx.toFixed(2)).toString();
+                    ctx.fillText(label, sx + 4, 14);
                 }
-                for (let y = startY; y < canvas.height; y += gridSize) {
-                    ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
+                // 繪製水平網格與 Y 刻度數值
+                for (let wy = startWorldY; wy <= endWorldY; wy += step) {
+                    const sy = Math.floor(wy * scale + offset.y) + 0.5;
+                    if (sy < 0 || sy > canvas.height) continue;
+                    ctx.moveTo(0, sy); ctx.lineTo(canvas.width, sy);
+                    const label = Number(wy.toFixed(2)).toString();
+                    ctx.fillText(label, 6, sy - 4);
                 }
                 ctx.stroke();
 
-                // 畫原點 (0, 0)
-                ctx.strokeStyle = '#cbd5e1';
+                // 畫原點 (0, 0) 主十字軸
+                ctx.strokeStyle = '#94a3b8';
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(offset.x, 0); ctx.lineTo(offset.x, canvas.height);
@@ -724,8 +775,10 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
                                     <span>{hoverInfo.label}</span>
                                     <span className="text-gray-400 font-mono text-[10px]">#{hoverInfo.index}</span>
                                 </div>
-                                <div>X 座標: <span className="font-mono">{hoverInfo.point.x.toFixed(3)} px</span></div>
-                                <div>Y 座標: <span className="font-mono">{hoverInfo.point.y.toFixed(3)} px</span></div>
+                                {hoverInfo.point.dx !== undefined && hoverInfo.point.dy !== undefined && (
+                                    <div className="text-cyan-300 font-medium">單幀位移 (dx, dy): <span className="font-mono">({hoverInfo.point.dx.toFixed(3)}, {hoverInfo.point.dy.toFixed(3)}) px</span></div>
+                                )}
+                                <div>全域累積 (X, Y): <span className="font-mono">({hoverInfo.point.x.toFixed(3)}, {hoverInfo.point.y.toFixed(3)}) px</span></div>
                                 {hoverInfo.point.err !== undefined && (
                                     <div className="text-amber-300 font-medium">距真值誤差: <span className="font-bold font-mono">{hoverInfo.point.err.toFixed(3)} px</span></div>
                                 )}

@@ -32,6 +32,9 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
         fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
 
     raw_hdr = OpniRawIO.read_header(raw_path)
+    use_corner_filter = 'mousepad' in raw_path.lower() or 'mousepad' in out_dir.lower()
+    if use_corner_filter:
+        print("[OptNavi] 啟用 4-Corner 角度紋理對齊濾波器 (打破滑鼠墊經緯編織 repeat pattern)")
     print(f"Evaluating {num_frames} frames under: Normal, Teacher, and Ideal modes...")
 
     # Preload frames
@@ -48,7 +51,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     print("\nRunning Mode: NORMAL...")
     normal_tracker = NormalModeTracker(search_radius=1, subpixel_scale=16, 
                                        keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                       fpn_model=fpn_model)
+                                       fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     normal_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]
@@ -72,7 +75,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     print("\nRunning Mode: TEACHER...")
     teacher_tracker = TeacherModeTracker(search_radius=1, subpixel_scale=16, 
                                          keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                         fpn_model=fpn_model)
+                                         fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     teacher_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]
@@ -88,7 +91,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     print("\nRunning Mode: IDEAL...")
     ideal_tracker = IdealModeTracker(search_radius=1, subpixel_scale=16, 
                                      keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                     fpn_model=fpn_model)
+                                     fpn_model=fpn_model, use_corner_filter=use_corner_filter)
     ideal_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]

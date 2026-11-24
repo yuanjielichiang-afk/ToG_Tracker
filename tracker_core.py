@@ -36,7 +36,8 @@ class NormalModeTracker:
     """
     def __init__(self, search_radius=1, subpixel_scale=16, 
                  keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                 fpn_model=None, max_ref_dist=6.0):
+                 fpn_model=None, max_ref_dist=6.0,
+                 use_corner_filter=False, corner_flat_bias=2.0):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
         self.keyframe_dist = keyframe_dist
@@ -44,6 +45,8 @@ class NormalModeTracker:
         self.v_alpha = v_alpha
         self.fpn_model = fpn_model
         self.max_ref_dist = max_ref_dist
+        self.use_corner_filter = use_corner_filter
+        self.corner_flat_bias = corner_flat_bias
 
         # 核心卷積核
         self.laplacian_kernel = np.array([
@@ -51,6 +54,20 @@ class NormalModeTracker:
             [-1.0,  4.0, -1.0],
             [ 0.0, -1.0,  0.0]
         ], dtype=np.float32)
+
+        # OptNavi.cpp 4-Corner 紋理對齊卷積核 (打破滑鼠墊經緯編織 repeat pattern)
+        self.k_cor000 = np.array([
+            [ 0.0, -1.0,  0.0],
+            [ 0.0,  2.0,  0.0],
+            [ 0.0, -1.0,  0.0]
+        ], dtype=np.float32)
+        self.k_cor045 = np.array([
+            [-1.0,  0.0,  0.0],
+            [ 0.0,  2.0,  0.0],
+            [ 0.0,  0.0, -1.0]
+        ], dtype=np.float32)
+        self.k_cor090 = self.k_cor000.T
+        self.k_cor135 = np.fliplr(self.k_cor045)
 
         # 狀態變數
         self.ref_frame = None          # 當前參考幀 (Keyframe)
@@ -67,6 +84,32 @@ class NormalModeTracker:
         if self.fpn_model is not None:
             return raw_frame.astype(np.float32) - self.fpn_model
         return raw_frame.astype(np.float32)
+
+    def apply_corner_filter(self, frame):
+        """
+        OptNavi::xSurfaceAlignFilterCorner 實現:
+        利用 4 方向 (0°, 45°, 90°, 135°) 二階差分卷積，檢測各方向的紋理響應。
+        當檢測到強方向性 (abs(max) - abs(min) > abs(no_align) + bias) 時，
+        判定為布質滑鼠墊的經緯編織週期條紋 (1D Repeat Pattern)，
+        主動抑制主方向強度，改取最小響應 abs(minAlignVal)，打破週期織紋假峰，消除次像素鋸齒狀跳動。
+        """
+        c000 = convolve2d(frame, self.k_cor000, mode='same', boundary='symm')
+        c045 = convolve2d(frame, self.k_cor045, mode='same', boundary='symm')
+        c090 = convolve2d(frame, self.k_cor090, mode='same', boundary='symm')
+        c135 = convolve2d(frame, self.k_cor135, mode='same', boundary='symm')
+
+        no_align = (c045 + c135) * 0.5
+        cor_stack = np.stack([c000, c045, c090, c135], axis=-1)
+        abs_cor = np.abs(cor_stack)
+
+        max_idx = np.argmax(abs_cor, axis=-1)
+        min_idx = np.argmin(abs_cor, axis=-1)
+        max_val = np.take_along_axis(cor_stack, max_idx[..., None], axis=-1).squeeze(-1)
+        min_val = np.take_along_axis(cor_stack, min_idx[..., None], axis=-1).squeeze(-1)
+
+        cond = (np.abs(max_val) - np.abs(min_val)) > (np.abs(no_align) + self.corner_flat_bias)
+        surf_align = np.where(cond, np.abs(min_val), no_align)
+        return surf_align
 
     def compute_squal(self, frame):
         """步驟 2: 計算特徵品質分數 (SQUAL - Laplacian Variance)"""
@@ -175,6 +218,8 @@ class NormalModeTracker:
     def step(self, raw_frame, frame_idx):
         """自主模式單幀處理主流程"""
         cur_frame = self.remove_fpn(raw_frame)
+        if self.use_corner_filter:
+            cur_frame = self.apply_corner_filter(cur_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:
@@ -260,6 +305,8 @@ class TeacherModeTracker(NormalModeTracker):
     """
     def step(self, raw_frame, frame_idx, gth_pos, gth_vel):
         cur_frame = self.remove_fpn(raw_frame)
+        if self.use_corner_filter:
+            cur_frame = self.apply_corner_filter(cur_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:
@@ -369,6 +416,8 @@ class IdealModeTracker(NormalModeTracker):
     """
     def step(self, raw_frame, frame_idx, gth_pos, gth_vel):
         cur_frame = self.remove_fpn(raw_frame)
+        if self.use_corner_filter:
+            cur_frame = self.apply_corner_filter(cur_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:

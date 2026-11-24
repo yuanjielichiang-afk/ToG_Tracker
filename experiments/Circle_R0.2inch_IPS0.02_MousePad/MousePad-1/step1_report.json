@@ -1,0 +1,16 @@
+{
+  "raw_file": "C:\\Data\\testPattern\u73bb\u7483\\Circle_R0.2inch_IPS0.02_MousePad\\MousePad-1.raw",
+  "width": 36,
+  "height": 36,
+  "total_frames": 5185,
+  "textureless_count": 0,
+  "anchor_count": 5185,
+  "textureless_indices_sample": [],
+  "anchor_clusters": [
+    {
+      "start": 0,
+      "end": 5184,
+      "len": 5185
+    }
+  ]
+}
