@@ -162,32 +162,52 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
         })
     tracks['ideal'] = ideal_pts
 
-    # 3. Export separate TXT files (包含單幀相對位移 dx, dy 與累積位置 x, y)
+    # 3. Export separate CSV files (包含單幀相對位移 dx, dy 與累積位置 x, y)
+    csv_gth = os.path.join(out_dir, 'Track_A_GroundTruth.csv')
     txt_gth = os.path.join(out_dir, 'Track_A_GroundTruth.txt')
+    content_gth = "frame,dx,dy,x,y,zone\n" + "".join(
+        f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{'T' if p['is_t'] else 'TL'}\n"
+        for i, p in enumerate(tracks['gth'])
+    )
+    with open(csv_gth, 'w', encoding='utf-8') as f:
+        f.write(content_gth)
     with open(txt_gth, 'w', encoding='utf-8') as f:
-        f.write("#frame,dx,dy,x,y,zone\n")
-        for i, p in enumerate(tracks['gth']):
-            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{'T' if p['is_t'] else 'TL'}\n")
+        f.write(content_gth)
 
+    csv_norm = os.path.join(out_dir, 'Track_B_NormalMode.csv')
     txt_norm = os.path.join(out_dir, 'Track_B_NormalMode.txt')
+    content_norm = "frame,dx,dy,x,y,err,zone,squal\n" + "".join(
+        f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n"
+        for i, p in enumerate(tracks['normal'])
+    )
+    with open(csv_norm, 'w', encoding='utf-8') as f:
+        f.write(content_norm)
     with open(txt_norm, 'w', encoding='utf-8') as f:
-        f.write("#frame,dx,dy,x,y,err,zone,squal\n")
-        for i, p in enumerate(tracks['normal']):
-            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+        f.write(content_norm)
 
+    csv_teach = os.path.join(out_dir, 'Track_C_TeacherMode.csv')
     txt_teach = os.path.join(out_dir, 'Track_C_TeacherMode.txt')
+    content_teach = "frame,dx,dy,x,y,err,intervened,zone,squal\n" + "".join(
+        f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{1 if p['int'] else 0},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n"
+        for i, p in enumerate(tracks['teacher'])
+    )
+    with open(csv_teach, 'w', encoding='utf-8') as f:
+        f.write(content_teach)
     with open(txt_teach, 'w', encoding='utf-8') as f:
-        f.write("#frame,dx,dy,x,y,err,intervened,zone,squal\n")
-        for i, p in enumerate(tracks['teacher']):
-            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{1 if p['int'] else 0},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+        f.write(content_teach)
 
+    csv_ideal = os.path.join(out_dir, 'Track_D_IdealMode.csv')
     txt_ideal = os.path.join(out_dir, 'Track_D_IdealMode.txt')
+    content_ideal = "frame,dx,dy,x,y,err,zone,squal\n" + "".join(
+        f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n"
+        for i, p in enumerate(tracks['ideal'])
+    )
+    with open(csv_ideal, 'w', encoding='utf-8') as f:
+        f.write(content_ideal)
     with open(txt_ideal, 'w', encoding='utf-8') as f:
-        f.write("#frame,dx,dy,x,y,err,zone,squal\n")
-        for i, p in enumerate(tracks['ideal']):
-            f.write(f"{i},{p['dx']:.3f},{p['dy']:.3f},{p['x']:.3f},{p['y']:.3f},{p['err']:.3f},{'T' if p['is_t'] else 'TL'},{p['squal']:.1f}\n")
+        f.write(content_ideal)
 
-    print(f"Exported all 4 TXT files to: {out_dir}")
+    print(f"Exported all 4 CSV/TXT files to: {out_dir}")
 
     # 4. Generate Preloaded HTML Viewer
     html_template = """<!DOCTYPE html>

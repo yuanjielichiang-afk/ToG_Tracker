@@ -165,7 +165,7 @@ def main():
     print(f"🎉 測試完成！所有結果已妥善獨立歸檔（不同序列絕不覆蓋）：")
     print(f"  📁 本次實驗目錄: {exp_dir}")
     print(f"  🌐 專屬互動檢視: {html_path}")
-    print(f"  📄 四軌跡詳細 TXT: {exp_dir}\\Track_*.txt")
+    print(f"  📄 四軌跡詳細 CSV: {exp_dir}\\Track_*.csv")
     print(f"  📊 重建真值 CSV  : {gth_csv_path}")
     print("=" * 75 + "\n")
 
