@@ -274,18 +274,33 @@ def main():
     xc, yc = float(np.mean(xs)), float(np.mean(ys))
     r_est = float(np.mean(np.sqrt((xs - xc)**2 + (ys - yc)**2)))
 
-    # 4. 儲存標準 CSV 輸出 (含 Metadata Header，完整記錄原始來源與配置)
+    # 4. 儲存標準 CSV 輸出 (含 Metadata Header 與 Feature Generation 完整配置，使用 utf-8-sig 防止 Excel 亂碼)
     csv_path = os.path.join(out_dir, "Track_B_NormalMode.csv")
-    with open(csv_path, "w", encoding="utf-8") as f:
+    csv_target = csv_path
+    try:
+        f_csv = open(csv_target, "w", encoding="utf-8-sig")
+    except PermissionError:
+        csv_target = os.path.join(out_dir, "Track_B_NormalMode_latest.csv")
+        print(f"\n  [提示] 檔案 {os.path.basename(csv_path)} 正被 Excel 或其他軟體開啟鎖定，已自動另存為: {os.path.basename(csv_target)}")
+        f_csv = open(csv_target, "w", encoding="utf-8-sig")
+
+    with f_csv as f:
         f.write(f"# RAW_SOURCE: {raw_path}\n")
         f.write(f"# PROCESSED_AT: {now_iso}\n")
         f.write(f"# SPECS: {w}x{h}, {total_frames} frames, {fps} fps, {bit_depth}-bit\n")
-        f.write(f"# CONFIG: filter={filter_type}, search_radius={search_radius}, subpixel=parabolic_2d (1/32px), keyframe_dist=2.5\n")
-        f.write(f"# HARDWARE: line_buffer={hw_specs['line_buffers']}, macs_per_pix={hw_specs['macs_per_pix']}\n")
-        f.write(f"# METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, mean_squal={np.mean(squals):.1f}\n")
+        f.write(f"# FEATURE_GENERATION_PIPELINE:\n")
+        f.write(f"#   1. FPN_Subtraction: Temporal Median (全序列時間中位數自適應底噪消除)\n")
+        f.write(f"#   2. Bandpass_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
+        f.write(f"#   3. Corner_Filter: {'Enabled (OptNavi 4-Corner 0/45/90/135 deg)' if use_corner_filter else 'Disabled'}\n")
+        f.write(f"#   4. SQUAL_Evaluation: 3x3 Laplacian Kernel (閾值={tracker.squal_th})\n")
+        f.write(f"#   5. Correlation_Surface: ZNCC 面積補償相關曲面比對 (搜尋半徑={search_radius})\n")
+        f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (解析度: 1/32 px)\n")
+        f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (SRAM節約 {hw_specs['sram_savings_pct']:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel (算力節約 {hw_specs['mac_savings_pct']:.1f}%)\n")
+        f.write(f"# TRACKING_METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, mean_squal={np.mean(squals):.1f}\n")
         f.write("frame,dx,dy,x,y,squal\n")
         for i in range(len(records)):
             f.write(f"{int(frames_idx[i])},{dxs[i]:.4f},{dys[i]:.4f},{xs[i]:.4f},{ys[i]:.4f},{squals[i]:.2f}\n")
+    print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含元數據標頭與 UTF-8 BOM): {csv_target}")
     print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含元數據標頭): {csv_path}")
 
     # 5. 儲存完整結構化元數據文件 (run_meta.json)

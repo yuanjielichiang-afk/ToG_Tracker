@@ -1,9 +1,15 @@
-# RAW_SOURCE: C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw
-# PROCESSED_AT: 2026-11-25T16:28:59.869373
+﻿# RAW_SOURCE: C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw
+# PROCESSED_AT: 2026-11-25T16:45:15.247566
 # SPECS: 36x36, 5373 frames, 82 fps, 8-bit
-# CONFIG: filter=bandpass5, search_radius=1, subpixel=parabolic_2d (1/32px), keyframe_dist=2.5
-# HARDWARE: line_buffer=5, macs_per_pix=25
-# METRICS: closure_error=20.07px, radius=174.81px, mean_squal=153.3
+# FEATURE_GENERATION_PIPELINE:
+#   1. FPN_Subtraction: Temporal Median (全序列時間中位數自適應底噪消除)
+#   2. Bandpass_Filter: BANDPASS5 (5x5 同心核 (零均值帶通))
+#   3. Corner_Filter: Disabled
+#   4. SQUAL_Evaluation: 3x3 Laplacian Kernel (閾值=5.0)
+#   5. Correlation_Surface: ZNCC 面積補償相關曲面比對 (搜尋半徑=1)
+#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (解析度: 1/32 px)
+# HARDWARE_RESOURCE: Line_Buffer=5 條 (SRAM節約 44.4%), 運算量=25 MAC/pixel (算力節約 69.1%)
+# TRACKING_METRICS: closure_error=20.07px, radius=174.81px, mean_squal=153.3
 frame,dx,dy,x,y,squal
 0,0.0000,0.0000,0.0000,0.0000,61.27
 1,0.0000,-0.0312,0.0000,-0.0312,63.37

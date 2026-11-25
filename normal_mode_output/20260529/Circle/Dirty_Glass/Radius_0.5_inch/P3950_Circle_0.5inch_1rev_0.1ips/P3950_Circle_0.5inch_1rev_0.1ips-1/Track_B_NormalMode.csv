@@ -1,9 +1,15 @@
-# RAW_SOURCE: C:\Data\testPattern玻璃\20260529\Circle\Dirty Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image\P3950_Circle_0.5inch_1rev_0.1ips-1.raw
-# PROCESSED_AT: 2026-11-25T16:28:05.035792
+﻿# RAW_SOURCE: C:\Data\testPattern玻璃\20260529\Circle\Dirty Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image\P3950_Circle_0.5inch_1rev_0.1ips-1.raw
+# PROCESSED_AT: 2026-11-25T16:45:28.610674
 # SPECS: 36x36, 13629 frames, 331 fps, 8-bit
-# CONFIG: filter=bandpass5, search_radius=1, subpixel=parabolic_2d (1/32px), keyframe_dist=2.5
-# HARDWARE: line_buffer=5, macs_per_pix=25
-# METRICS: closure_error=11.58px, radius=427.89px, mean_squal=781.8
+# FEATURE_GENERATION_PIPELINE:
+#   1. FPN_Subtraction: Temporal Median (全序列時間中位數自適應底噪消除)
+#   2. Bandpass_Filter: BANDPASS5 (5x5 同心核 (零均值帶通))
+#   3. Corner_Filter: Disabled
+#   4. SQUAL_Evaluation: 3x3 Laplacian Kernel (閾值=5.0)
+#   5. Correlation_Surface: ZNCC 面積補償相關曲面比對 (搜尋半徑=1)
+#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (解析度: 1/32 px)
+# HARDWARE_RESOURCE: Line_Buffer=5 條 (SRAM節約 44.4%), 運算量=25 MAC/pixel (算力節約 69.1%)
+# TRACKING_METRICS: closure_error=11.58px, radius=427.89px, mean_squal=781.8
 frame,dx,dy,x,y,squal
 0,0.0000,0.0000,0.0000,0.0000,362.23
 1,0.0000,0.0000,0.0000,0.0000,363.70
