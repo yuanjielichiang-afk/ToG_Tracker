@@ -60,9 +60,14 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     for fi in range(num_frames):
         cur_f = frames[fi]
         res = normal_tracker.step(cur_f, fi)
-        # Basin check against GTH
-        pos_err_x = abs(round(res['pred_x']) - gth_x[fi])
-        pos_err_y = abs(round(res['pred_y']) - gth_y[fi])
+        # Basin check against GTH (感測器陣列相對位移誤差 <= 1.0 px，排除歷史累積漂移干擾)
+        ref_k = res['ref_idx']
+        true_rel_x = gth_x[fi] - gth_x[ref_k]
+        true_rel_y = gth_y[fi] - gth_y[ref_k]
+        pred_rel_x = res.get('pred_rel_x', res['pred_x'] - gth_x[ref_k])
+        pred_rel_y = res.get('pred_rel_y', res['pred_y'] - gth_y[ref_k])
+        pos_err_x = abs(true_rel_x - pred_rel_x)
+        pos_err_y = abs(true_rel_y - pred_rel_y)
         in_basin = bool(pos_err_x <= 1.0 and pos_err_y <= 1.0)
         res['in_basin'] = in_basin
         res['teacher_intervened'] = False

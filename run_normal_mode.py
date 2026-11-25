@@ -54,22 +54,39 @@ def find_raw_file(raw_input):
 
     return None
 
-def compute_initial_fpn(raw_path, header, num_sample_frames=80):
-    """從序列前段靜止或均勻區提取感測器 Fixed Pattern Noise (FPN) 模型"""
+def find_existing_fpn(raw_path):
+    """搜尋現有的高品質 FPN 模型"""
+    seq_name = os.path.splitext(os.path.basename(raw_path))[0]
+    parent_dir = os.path.basename(os.path.dirname(os.path.abspath(raw_path)))
+    if parent_dir.upper() in ['RAW', 'CSV', 'PNG']:
+        parent_dir = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(raw_path))))
+
+    candidate_fpns = [
+        os.path.join(SCRIPT_DIR, "experiments", parent_dir, seq_name, "fpn_model.raw"),
+        os.path.join(SCRIPT_DIR, "step1_output", "fpn_model.raw"),
+        os.path.join(os.path.dirname(raw_path), "fpn_model.raw"),
+    ]
+    for fp in candidate_fpns:
+        if os.path.exists(fp):
+            return os.path.abspath(fp)
+    return None
+
+def compute_temporal_median_fpn(raw_path, header, n_samples=300):
+    """
+    透過全序列時間中位數 (Temporal Median) 提取純淨感測器 FPN 底噪。
+    中位數可完美剔除移動中的微塵與表面特徵，防止微塵被誤算進 FPN 導致特徵消失。
+    """
     total_frames = header['num_frames']
-    sample_count = min(num_sample_frames, total_frames)
-    frames = []
+    sample_step = max(1, total_frames // n_samples)
+    sampled = []
     with open(raw_path, 'rb') as f:
-        # 每隔 2 幀採樣一次
-        for fi in range(0, min(sample_count * 2, total_frames), 2):
-            frm = OpniRawIO.load_frame(f, header, fi)
+        for idx in range(0, total_frames, sample_step):
+            frm = OpniRawIO.load_frame(f, header, idx)
             if frm is not None:
-                frames.append(frm.astype(np.float32))
-            if len(frames) >= sample_count:
-                break
-    if not frames:
+                sampled.append(frm.astype(np.float32))
+    if not sampled:
         return None
-    return np.mean(frames, axis=0)
+    return np.median(sampled, axis=0)
 
 def main():
     parser = argparse.ArgumentParser(description="ToG Tracker 純 Normal Mode 自主追蹤工具")
@@ -113,8 +130,15 @@ def main():
         with open(args.fpn, 'rb') as f:
             fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
     else:
-        print("[1/3] 自適應提取感測器 FPN 底噪模型...")
-        fpn_model = compute_initial_fpn(raw_path, header)
+        existing_fpn = find_existing_fpn(raw_path)
+        if existing_fpn:
+            print(f"[1/3] 載入已校準的 FPN 模型: {existing_fpn}")
+            fpn_hdr = OpniRawIO.read_header(existing_fpn)
+            with open(existing_fpn, 'rb') as f:
+                fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
+        else:
+            print("[1/3] 使用全序列時間中位數 (Temporal Median) 自適應提取純淨 FPN 底噪...")
+            fpn_model = compute_temporal_median_fpn(raw_path, header)
 
     # 2. 確定追蹤參數
     if args.radius is not None:

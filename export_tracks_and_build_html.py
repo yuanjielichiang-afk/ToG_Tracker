@@ -102,8 +102,13 @@ def run_export(raw_path=None, gth_csv_path=None, fpn_path=None, out_dir=None, st
     norm_pts = []
     for fi in range(num_frames):
         res = tracker_norm.step(frames[fi], fi)
-        pos_err_x = abs(round(res['pred_x']) - gth_x[fi])
-        pos_err_y = abs(round(res['pred_y']) - gth_y[fi])
+        ref_k = res['ref_idx']
+        true_rel_x = gth_x[fi] - gth_x[ref_k]
+        true_rel_y = gth_y[fi] - gth_y[ref_k]
+        pred_rel_x = res.get('pred_rel_x', res['pred_x'] - gth_x[ref_k])
+        pred_rel_y = res.get('pred_rel_y', res['pred_y'] - gth_y[ref_k])
+        pos_err_x = abs(true_rel_x - pred_rel_x)
+        pos_err_y = abs(true_rel_y - pred_rel_y)
         in_basin = bool(pos_err_x <= 1.0 and pos_err_y <= 1.0)
         norm_pts.append({
             'x': round(float(res['est_x']), 3),

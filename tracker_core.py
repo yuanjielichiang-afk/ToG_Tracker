@@ -290,6 +290,8 @@ class NormalModeTracker:
             'est_dy': frame_dy,
             'pred_x': pred_gx,
             'pred_y': pred_gy,
+            'pred_rel_x': pred_dx_rel,
+            'pred_rel_y': pred_dy_rel,
             'score': best_score,
             'squal': squal,
             'ref_idx': self.ref_idx
@@ -302,9 +304,14 @@ class TeacherModeTracker(NormalModeTracker):
     
     運作特點：
       - 平時以自主模式進行預測與比對。
-      - 每幀檢查預測位置是否落在 Ground Truth (GTH) 的 3x3 捕捉窗口 (Capture Basin: 誤差 <= 1.0 px) 內。
-      - 當預測脫靶 (Mismatch) 時，老師 (Ground Truth) 強制介入，重設搜尋中心與速度。
+      - 每幀檢查感測器陣列上的相對預測位置是否落在 Ground Truth (GTH) 的 3x3 捕捉窗口 (Capture Basin: 相對誤差 <= 1.0 px) 內。
+      - 排除歷史累積漂移干擾，只衡量「當前相對搜尋窗口是否套中特徵」。
+      - 當預測脫靶 (Mismatch) 時，老師 (Ground Truth) 強制介入，重設感測器搜尋中心、速度與全局座標。
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ref_gth = None
+
     def step(self, raw_frame, frame_idx, gth_pos, gth_vel):
         cur_frame = self.remove_fpn(raw_frame)
         if self.use_corner_filter:
@@ -314,6 +321,7 @@ class TeacherModeTracker(NormalModeTracker):
         if self.ref_frame is None:
             self.ref_frame = cur_frame
             self.ref_idx = frame_idx
+            self.ref_gth = (gth_pos[0], gth_pos[1])
             self.global_x = gth_pos[0]
             self.global_y = gth_pos[1]
             return {
@@ -333,14 +341,16 @@ class TeacherModeTracker(NormalModeTracker):
                 'ref_idx': self.ref_idx
             }
 
-        # 1. 自主預測
-        px_auto, py_auto, pred_dx_rel, pred_dy_rel = self.predict_displacement()
-        pred_gx = (self.global_x - self.last_dx_rel) + pred_dx_rel
-        pred_gy = (self.global_y - self.last_dy_rel) + pred_dy_rel
+        # 1. 物理感測器陣列相對位移 (排除全局歷史累積漂移)
+        true_rel_x = gth_pos[0] - self.ref_gth[0]
+        true_rel_y = gth_pos[1] - self.ref_gth[1]
 
-        # 2. 捕捉窗口判斷 (Capture Basin Check)
-        pos_err_x = abs(round(pred_gx) - gth_pos[0])
-        pos_err_y = abs(round(pred_gy) - gth_pos[1])
+        # 2. 自主預測 (在感測器陣列上的相對位移)
+        px_auto, py_auto, pred_dx_rel, pred_dy_rel = self.predict_displacement()
+
+        # 3. 捕捉窗口判斷 (Relative Basin Check: 感測器陣列預測誤差 <= 1.0 px)
+        pos_err_x = abs(true_rel_x - px_auto)
+        pos_err_y = abs(true_rel_y - py_auto)
         in_basin = bool(pos_err_x <= 1.0 and pos_err_y <= 1.0)
 
         teacher_intervened = False
@@ -348,14 +358,15 @@ class TeacherModeTracker(NormalModeTracker):
             px, py = px_auto, py_auto
         else:
             teacher_intervened = True
-            ref_origin_x = self.global_x - self.last_dx_rel
-            ref_origin_y = self.global_y - self.last_dy_rel
-            px = int(round(gth_pos[0] - ref_origin_x))
-            py = int(round(gth_pos[1] - ref_origin_y))
+            px = int(round(true_rel_x))
+            py = int(round(true_rel_y))
             self.v_x = gth_vel[0]
             self.v_y = gth_vel[1]
+            # 強制將累積漂移校正回真值
+            self.global_x = gth_pos[0] - self.last_dx_rel + pred_dx_rel
+            self.global_y = gth_pos[1] - self.last_dy_rel + pred_dy_rel
 
-        # 3. 相關匹配
+        # 相關匹配
         surface = self.compute_correlation_surface(cur_frame, self.ref_frame, px, py)
 
         r = self.r
@@ -388,7 +399,8 @@ class TeacherModeTracker(NormalModeTracker):
         self.last_dx_rel = dx_q
         self.last_dy_rel = dy_q
 
-        self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
+        if self.update_keyframe_if_needed(cur_frame, frame_idx, squal):
+            self.ref_gth = (gth_pos[0], gth_pos[1])
 
         return {
             'frame': frame_idx,
@@ -396,8 +408,8 @@ class TeacherModeTracker(NormalModeTracker):
             'est_y': self.global_y,
             'est_dx': frame_dx,
             'est_dy': frame_dy,
-            'pred_x': pred_gx,
-            'pred_y': pred_gy,
+            'pred_x': self.global_x - self.last_dx_rel + pred_dx_rel,
+            'pred_y': self.global_y - self.last_dy_rel + pred_dy_rel,
             'gth_x': gth_pos[0],
             'gth_y': gth_pos[1],
             'in_basin': in_basin,
