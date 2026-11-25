@@ -10,7 +10,7 @@ sys.path.append(r'C:\PROJECT\ToG_Tracker')
 from step1_anchor_and_textureless_analyzer import OpniRawIO
 from tracker_core import NormalModeTracker, TeacherModeTracker, IdealModeTracker
 
-def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
+def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir, use_bandpass=True):
     os.makedirs(out_dir, exist_ok=True)
     print("=" * 70)
     print("STEP 3: Optical Mouse Algorithm Evaluation Engine (Three Modes)")
@@ -35,6 +35,9 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
     use_corner_filter = 'mousepad' in raw_path.lower() or 'mousepad' in out_dir.lower()
     if use_corner_filter:
         print("[OptNavi] 啟用 4-Corner 角度紋理對齊濾波器 (打破滑鼠墊經緯編織 repeat pattern)")
+        use_bandpass = False
+    elif use_bandpass:
+        print("[OptNavi] 啟用 9x9 同心帶通濾波器前處理 (強化微塵特徵、濾除低頻漸變光暈)")
         
     # 動態自適應搜尋半徑：對於高解析度或高速序列 (如 FAMS 64x64 或 4 ips)，使用 search_radius=2 (5x5 窗口)
     search_radius = 2 if (raw_hdr.get('width', 36) >= 64 or '4ips' in raw_path.lower()) else 1
@@ -53,9 +56,10 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 1. Normal Mode
     print("\nRunning Mode: NORMAL...")
-    normal_tracker = NormalModeTracker(search_radius=search_radius, subpixel_scale=16, 
-                                       keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                       fpn_model=fpn_model, use_corner_filter=use_corner_filter)
+    normal_tracker = NormalModeTracker(search_radius=search_radius, subpixel_scale=32, 
+                                       keyframe_dist=2.5, squal_th=5.0, v_alpha=0.25,
+                                       fpn_model=fpn_model, use_corner_filter=use_corner_filter,
+                                       use_bandpass_filter=use_bandpass)
     normal_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]
@@ -82,9 +86,10 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 2. Teacher Mode
     print("\nRunning Mode: TEACHER...")
-    teacher_tracker = TeacherModeTracker(search_radius=search_radius, subpixel_scale=16, 
-                                         keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                         fpn_model=fpn_model, use_corner_filter=use_corner_filter)
+    teacher_tracker = TeacherModeTracker(search_radius=search_radius, subpixel_scale=32, 
+                                         keyframe_dist=2.5, squal_th=5.0, v_alpha=0.25,
+                                         fpn_model=fpn_model, use_corner_filter=use_corner_filter,
+                                         use_bandpass_filter=use_bandpass)
     teacher_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]
@@ -98,9 +103,10 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
 
     # 3. Ideal Mode
     print("\nRunning Mode: IDEAL...")
-    ideal_tracker = IdealModeTracker(search_radius=search_radius, subpixel_scale=16, 
-                                     keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
-                                     fpn_model=fpn_model, use_corner_filter=use_corner_filter)
+    ideal_tracker = IdealModeTracker(search_radius=search_radius, subpixel_scale=32, 
+                                     keyframe_dist=2.5, squal_th=5.0, v_alpha=0.25,
+                                     fpn_model=fpn_model, use_corner_filter=use_corner_filter,
+                                     use_bandpass_filter=use_bandpass)
     ideal_records = []
     for fi in range(num_frames):
         cur_f = frames[fi]
@@ -148,6 +154,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir):
             'final_drift_px': float(pos_err[-1]),
             'max_ate_px': float(np.max(pos_err)),
             'mean_ate_px': float(np.mean(pos_err)),
+            'ate_rmse_px': float(np.sqrt(np.mean(pos_err**2))),
             'in_basin_rate_all': float(np.mean(in_basin) * 100.0),
             'in_basin_rate_texture_zone': float(np.mean(in_basin[t_mask]) * 100.0),
             'mismatch_interventions_count': int(np.sum(teacher_int)),

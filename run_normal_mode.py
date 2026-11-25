@@ -19,6 +19,8 @@ ToG Tracker: Standalone Normal Mode Runner (純自主追蹤執行器)
 import os
 import sys
 import argparse
+import json
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -55,16 +57,16 @@ def find_raw_file(raw_input):
     return None
 
 def find_existing_fpn(raw_path):
-    """搜尋現有的高品質 FPN 模型"""
+    """搜尋現有的高品質 FPN 模型 (僅限同序列或同目錄)"""
     seq_name = os.path.splitext(os.path.basename(raw_path))[0]
     parent_dir = os.path.basename(os.path.dirname(os.path.abspath(raw_path)))
-    if parent_dir.upper() in ['RAW', 'CSV', 'PNG']:
+    if parent_dir.upper() in ['RAW', 'CSV', 'PNG', 'IMAGE']:
         parent_dir = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(raw_path))))
 
     candidate_fpns = [
         os.path.join(SCRIPT_DIR, "experiments", parent_dir, seq_name, "fpn_model.raw"),
-        os.path.join(SCRIPT_DIR, "step1_output", "fpn_model.raw"),
         os.path.join(os.path.dirname(raw_path), "fpn_model.raw"),
+        os.path.join(os.path.dirname(os.path.dirname(raw_path)), "fpn_model.raw"),
     ]
     for fp in candidate_fpns:
         if os.path.exists(fp):
@@ -88,13 +90,66 @@ def compute_temporal_median_fpn(raw_path, header, n_samples=300):
         return None
     return np.median(sampled, axis=0)
 
+def get_smart_output_dir(raw_path, base_out=None, tag=None):
+    """
+    智能階層輸出目錄生成器 (Smart Hierarchical Output Directory Resolver)
+    
+    徹底解決 Clean Glass 與 Dirty Glass (或不同測試條件) 同檔名導致的覆蓋衝突。
+    自動擷取路徑中的關鍵鑑別目錄（如 Clean Glass / Dirty Glass、半徑、速度等），
+    並過濾掉無鑑別度的中介容器層（如 Image, RAW, Trace, CSV）。
+    
+    範例：
+      輸入: C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_0.1ips\\Image\\P3950_Circle_0.5inch_1rev_0.1ips-1.raw
+      輸出: normal_mode_output/20260529/Circle/Clean_Glass/Radius_0.5_inch/P3950_Circle_0.5inch_1rev_0.1ips/P3950_Circle_0.5inch_1rev_0.1ips-1/
+    """
+    if base_out:
+        return os.path.abspath(base_out)
+
+    abs_path = os.path.abspath(raw_path)
+    seq_name = os.path.splitext(os.path.basename(abs_path))[0]
+    
+    # 搜尋已知的資料集根目錄標記
+    known_roots = ["testPattern玻璃", "DATA_FAMS", "ToG_Tracker", "Data"]
+    parts = os.path.normpath(abs_path).split(os.sep)
+    lower_parts = [p.lower() for p in parts]
+    
+    matched_parts = None
+    for r in known_roots:
+        if r.lower() in lower_parts:
+            idx = lower_parts.index(r.lower())
+            matched_parts = parts[idx + 1:-1] # 排除根與檔名
+            break
+            
+    if matched_parts and len(matched_parts) > 0:
+        filtered = [p.replace(' ', '_') for p in matched_parts if p.upper() not in ['IMAGE', 'RAW', 'TRACE', 'CSV', 'DATA']]
+        subpath = os.path.join(*filtered) if filtered else ''
+    else:
+        p_dir = os.path.dirname(abs_path)
+        p_name = os.path.basename(p_dir)
+        if p_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
+            p_name = os.path.basename(os.path.dirname(p_dir))
+        subpath = p_name.replace(' ', '_')
+
+    folder_name = seq_name
+    if tag:
+        folder_name += f"_{tag}"
+
+    out_dir = os.path.join(SCRIPT_DIR, "normal_mode_output", subpath, folder_name)
+    return os.path.abspath(out_dir)
+
 def main():
     parser = argparse.ArgumentParser(description="ToG Tracker 純 Normal Mode 自主追蹤工具")
     parser.add_argument("raw", help="RAW 檔案名稱或完整路徑 (例如: POS1-1.raw)")
-    parser.add_argument("--out", "-o", default=None, help="輸出目錄 (預設為當前目錄或 RAW 同層)")
+    parser.add_argument("--out", "-o", default=None, help="輸出目錄 (預設為智能階層目錄)")
+    parser.add_argument("--tag", default=None, help="輸出目錄自訂標籤後綴 (例如: v1, bandpass5)")
     parser.add_argument("--fpn", default=None, help="指定 FPN 模型路徑 (.raw 檔，預設自動提取)")
     parser.add_argument("--radius", "-r", type=int, default=None, help="搜尋半徑 (預設: 36x36 為 1, >=64x64 為 2)")
     parser.add_argument("--plot", action="store_true", default=True, help="是否生成 2D 軌跡折線圖 (預設開啟)")
+    parser.add_argument("--filter", default="bandpass5", 
+                        choices=["bandpass5", "bandpass5_sep", "bandpass9", "none"],
+                        help="前處理濾波器類型 (預設: bandpass5, 僅需 5 條 Line Buffer, 25 MAC)")
+    parser.add_argument("--bandpass", action="store_true", default=True, help="啟用帶通濾波器前處理 (相容舊參數)")
+    parser.add_argument("--no-bandpass", dest="bandpass", action="store_false", help="關閉帶通濾波器")
     args = parser.parse_args()
 
     raw_path = find_raw_file(args.raw)
@@ -102,12 +157,13 @@ def main():
         print(f"[錯誤] 找不到 RAW 檔案: {args.raw}")
         sys.exit(1)
 
-    # 決定輸出目錄
-    if args.out:
-        out_dir = os.path.abspath(args.out)
-    else:
-        seq_name = os.path.splitext(os.path.basename(raw_path))[0]
-        out_dir = os.path.join(SCRIPT_DIR, "normal_mode_output", seq_name)
+    # 決定濾波器類型
+    filter_type = args.filter.lower()
+    if not args.bandpass:
+        filter_type = 'none'
+
+    # 決定輸出目錄 (智慧階層解析，永不衝突)
+    out_dir = get_smart_output_dir(raw_path, args.out, args.tag)
     os.makedirs(out_dir, exist_ok=True)
 
     header = OpniRawIO.read_header(raw_path)
@@ -115,13 +171,26 @@ def main():
     total_frames = header['num_frames']
     fps = header['fps']
     bit_depth = header.get('bit_depth', 8)
+    file_size_bytes = os.path.getsize(raw_path)
+    file_mtime = datetime.fromtimestamp(os.path.getmtime(raw_path)).isoformat()
+    now_iso = datetime.now().isoformat()
 
-    print("\n" + "=" * 70)
+    # 硬體開銷與算力評估
+    hw_specs = {
+        'bandpass5': {'line_buffers': 5, 'macs_per_pix': 25, 'sram_savings_pct': 44.4, 'mac_savings_pct': 69.1, 'desc': '5x5 同心核 (零均值帶通)'},
+        'bandpass5_sep': {'line_buffers': 5, 'macs_per_pix': 10, 'sram_savings_pct': 44.4, 'mac_savings_pct': 87.7, 'desc': '5x5 可分離 1D+1D 卷積 (極簡低功耗)'},
+        'bandpass9': {'line_buffers': 9, 'macs_per_pix': 81, 'sram_savings_pct': 0.0, 'mac_savings_pct': 0.0, 'desc': '9x9 同心帶通核 (基準)'},
+        'none': {'line_buffers': 0, 'macs_per_pix': 0, 'sram_savings_pct': 100.0, 'mac_savings_pct': 100.0, 'desc': '無濾波器'}
+    }[filter_type]
+
+    print("\n" + "=" * 75)
     print("  ToG Tracker: Normal Mode 獨立追蹤器")
-    print(f"  目標檔案: {raw_path}")
-    print(f"  影像規格: {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS")
-    print(f"  輸出路徑: {out_dir}")
-    print("=" * 70)
+    print(f"  原始 RAW 檔案: {raw_path}")
+    print(f"  影像規格      : {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS")
+    print(f"  前處理濾波器  : {filter_type.upper()} ({hw_specs['desc']})")
+    print(f"  硬體資源消耗  : Line Buffer={hw_specs['line_buffers']} 條 (SRAM減省 {hw_specs['sram_savings_pct']:.1f}%), MAC/Pix={hw_specs['macs_per_pix']} (算力減省 {hw_specs['mac_savings_pct']:.1f}%)")
+    print(f"  智能輸出目錄  : {out_dir}")
+    print("=" * 75)
 
     # 1. 準備 FPN 模型
     if args.fpn and os.path.exists(args.fpn):
@@ -150,15 +219,18 @@ def main():
     if use_corner_filter:
         print("  [提示] 偵測到滑鼠墊紋理，啟用 OptNavi 4-Corner 抗鋸齒濾波器")
 
-    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, 窗口: {2*search_radius+1}x{2*search_radius+1})...")
+    use_bandpass = (filter_type != 'none')
+    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, 次像素解算: 解析解 2D 橢圓拋物面)...")
     tracker = NormalModeTracker(
         search_radius=search_radius,
-        subpixel_scale=16,
-        keyframe_dist=1.5,
+        subpixel_scale=32,
+        keyframe_dist=2.5,
         squal_th=5.0,
         v_alpha=0.25,
         fpn_model=fpn_model,
-        use_corner_filter=use_corner_filter
+        use_corner_filter=use_corner_filter,
+        use_bandpass_filter=use_bandpass,
+        bandpass_type=filter_type
     )
 
     # 3. 逐幀執行追蹤
@@ -195,22 +267,86 @@ def main():
     ys = records[:, 4]
     squals = records[:, 5]
 
-    # 4. 儲存標準 CSV 輸出
+    # 指標統計
+    speeds = np.sqrt(dxs**2 + dys**2)
+    moving_mask = speeds > 0.01
+    closure_error_px = float(np.sqrt((xs[-1] - xs[0])**2 + (ys[-1] - ys[0])**2))
+    xc, yc = float(np.mean(xs)), float(np.mean(ys))
+    r_est = float(np.mean(np.sqrt((xs - xc)**2 + (ys - yc)**2)))
+
+    # 4. 儲存標準 CSV 輸出 (含 Metadata Header，完整記錄原始來源與配置)
     csv_path = os.path.join(out_dir, "Track_B_NormalMode.csv")
     with open(csv_path, "w", encoding="utf-8") as f:
+        f.write(f"# RAW_SOURCE: {raw_path}\n")
+        f.write(f"# PROCESSED_AT: {now_iso}\n")
+        f.write(f"# SPECS: {w}x{h}, {total_frames} frames, {fps} fps, {bit_depth}-bit\n")
+        f.write(f"# CONFIG: filter={filter_type}, search_radius={search_radius}, subpixel=parabolic_2d (1/32px), keyframe_dist=2.5\n")
+        f.write(f"# HARDWARE: line_buffer={hw_specs['line_buffers']}, macs_per_pix={hw_specs['macs_per_pix']}\n")
+        f.write(f"# METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, mean_squal={np.mean(squals):.1f}\n")
         f.write("frame,dx,dy,x,y,squal\n")
         for i in range(len(records)):
             f.write(f"{int(frames_idx[i])},{dxs[i]:.4f},{dys[i]:.4f},{xs[i]:.4f},{ys[i]:.4f},{squals[i]:.2f}\n")
-    print(f"\n[完成] 已成功匯出標準 CSV 軌跡: {csv_path}")
+    print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含元數據標頭): {csv_path}")
 
-    # 5. 繪製並儲存軌跡圖 (若啟用)
+    # 5. 儲存完整結構化元數據文件 (run_meta.json)
+    meta_path = os.path.join(out_dir, "run_meta.json")
+    meta_data = {
+        "raw_file_info": {
+            "absolute_path": raw_path,
+            "filename": os.path.basename(raw_path),
+            "size_bytes": file_size_bytes,
+            "modified_time": file_mtime
+        },
+        "execution_info": {
+            "timestamp": now_iso,
+            "output_directory": out_dir,
+            "command_args": sys.argv[1:]
+        },
+        "image_specifications": {
+            "width": w,
+            "height": h,
+            "bit_depth": bit_depth,
+            "fps": fps,
+            "total_frames": total_frames
+        },
+        "hardware_and_algorithm_config": {
+            "filter_type": filter_type,
+            "line_buffer_lines": hw_specs['line_buffers'],
+            "macs_per_pixel": hw_specs['macs_per_pix'],
+            "sram_savings_pct": hw_specs['sram_savings_pct'],
+            "mac_savings_pct": hw_specs['mac_savings_pct'],
+            "search_radius": search_radius,
+            "subpixel_method": "analytical_2d_paraboloid",
+            "subpixel_scale": 32,
+            "keyframe_dist": 2.5,
+            "squal_threshold": 5.0,
+            "v_alpha": 0.25
+        },
+        "tracking_metrics": {
+            "total_frames_processed": len(xs),
+            "active_moving_frames": int(np.sum(moving_mask)),
+            "active_moving_ratio": float(np.mean(moving_mask)),
+            "closure_error_px": round(closure_error_px, 2),
+            "estimated_circle_radius_px": round(r_est, 2),
+            "circle_center_px": [round(xc, 2), round(yc, 2)],
+            "final_position_px": [round(float(xs[-1]), 2), round(float(ys[-1]), 2)],
+            "mean_speed_px_per_frame": round(float(np.mean(speeds[moving_mask])) if np.any(moving_mask) else 0.0, 3),
+            "max_speed_px_per_frame": round(float(np.max(speeds)), 3),
+            "mean_squal": round(float(np.mean(squals)), 1)
+        }
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_data, f, indent=2, ensure_ascii=False)
+    print(f"[完成] 已成功記錄結構化元數據日誌: {meta_path}")
+
+    # 6. 繪製並儲存軌跡圖 (若啟用)
     if args.plot and len(xs) > 1:
         plot_path = os.path.join(out_dir, "Track_B_NormalMode_plot.png")
         plt.figure(figsize=(8, 8))
-        plt.plot(xs, ys, color='#2563eb', linewidth=1.5, label='Track B: Normal Mode')
+        plt.plot(xs, ys, color='#2563eb', linewidth=1.5, label=f'Normal Mode ({filter_type})')
         plt.scatter(xs[0], ys[0], color='#10b981', s=80, marker='o', edgecolors='black', label='Start (0, 0)', zorder=5)
         plt.scatter(xs[-1], ys[-1], color='#ef4444', s=80, marker='s', edgecolors='black', label=f'End ({xs[-1]:.1f}, {ys[-1]:.1f})', zorder=5)
-        plt.title(f"Normal Mode Trajectory: {os.path.basename(raw_path)} ({len(xs)} frames)", fontsize=13, fontweight='bold')
+        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, MAC={hw_specs['macs_per_pix']}) | E_close={closure_error_px:.2f}px | R={r_est:.1f}px", fontsize=11, fontweight='bold')
         plt.xlabel("Accumulated X (pixels)", fontsize=11)
         plt.ylabel("Accumulated Y (pixels)", fontsize=11)
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -221,14 +357,14 @@ def main():
         plt.close()
         print(f"[完成] 已生成軌跡視覺化圖: {plot_path}")
 
-    # 統計摘要
-    speeds = np.sqrt(dxs**2 + dys**2)
-    moving_mask = speeds > 0.01
-    print("\n" + "=" * 70)
+    # 終端機統計摘要
+    print("\n" + "=" * 75)
     print("  Normal Mode 追蹤成果統計")
-    print("=" * 70)
+    print("=" * 75)
     print(f"  總處理幀數      : {len(xs)} 幀")
     print(f"  運動活躍幀數    : {np.sum(moving_mask)} 幀 ({np.mean(moving_mask)*100:.1f}%)")
+    print(f"  回原點閉環誤差  : {closure_error_px:.2f} px")
+    print(f"  擬合圓半徑      : {r_est:.2f} px (中心: [{xc:.1f}, {yc:.1f}])")
     print(f"  最終累積位移 (X): {xs[-1]:+.2f} px")
     print(f"  最終累積位移 (Y): {ys[-1]:+.2f} px")
     print(f"  X 座標極值範圍  : [{np.min(xs):.2f}, {np.max(xs):.2f}] px (跨距: {np.ptp(xs):.2f} px)")
@@ -236,7 +372,7 @@ def main():
     print(f"  平均單幀運動速度: {np.mean(speeds[moving_mask]) if np.any(moving_mask) else 0.0:.3f} px/frame")
     print(f"  最大單幀運動速度: {np.max(speeds):.3f} px/frame")
     print(f"  平均特徵品質SQUAL: {np.mean(squals):.1f}")
-    print("=" * 70 + "\n")
+    print("=" * 75 + "\n")
 
 if __name__ == '__main__':
     main()

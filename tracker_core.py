@@ -34,10 +34,12 @@ class NormalModeTracker:
       - 僅在上一幀所預估的 3x3 (或 5x5) 窗口內做相關比對。
       - 具備速度突波防污染保護，防止網格交界翻轉產生的差分雜訊污染速度預測器。
     """
-    def __init__(self, search_radius=1, subpixel_scale=16, 
-                 keyframe_dist=1.5, squal_th=5.0, v_alpha=0.25,
+    def __init__(self, search_radius=1, subpixel_scale=32, 
+                 keyframe_dist=2.5, squal_th=5.0, v_alpha=0.25,
                  fpn_model=None, max_ref_dist=6.0,
                  use_corner_filter=False, corner_flat_bias=2.0,
+                 use_bandpass_filter=False, bandpass_type='bandpass5',
+                 subpixel_method='parabolic_2d',
                  max_phys_v=None):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
@@ -48,6 +50,9 @@ class NormalModeTracker:
         self.max_ref_dist = max_ref_dist
         self.use_corner_filter = use_corner_filter
         self.corner_flat_bias = corner_flat_bias
+        self.use_bandpass_filter = use_bandpass_filter
+        self.bandpass_type = bandpass_type.lower() if bandpass_type else 'bandpass5'
+        self.subpixel_method = subpixel_method
         self.max_phys_v = max_phys_v if max_phys_v is not None else max(0.5, self.r * 1.0)
 
         # 核心卷積核
@@ -56,6 +61,38 @@ class NormalModeTracker:
             [-1.0,  4.0, -1.0],
             [ 0.0, -1.0,  0.0]
         ], dtype=np.float32)
+
+        # 1. OptNavi.cpp 9x9 同心帶通卷積核 (需要 9 條 Line Buffer, 81 次 MAC)
+        d = [184, 7, -15, -17, -11, -5, -1, -1, 2, 5]
+        self.k_bandpass9 = np.array([
+            [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]],
+            [d[3], d[9], d[8], d[7], d[6], d[7], d[8], d[9], d[3]],
+            [d[2], d[8], d[5], d[4], d[3], d[4], d[5], d[8], d[2]],
+            [d[1], d[7], d[4], d[2], d[1], d[2], d[4], d[7], d[1]],
+            [d[0], d[6], d[3], d[1], d[0], d[1], d[3], d[6], d[0]],
+            [d[1], d[7], d[4], d[2], d[1], d[2], d[4], d[7], d[1]],
+            [d[2], d[8], d[5], d[4], d[3], d[4], d[5], d[8], d[2]],
+            [d[3], d[9], d[8], d[7], d[6], d[7], d[8], d[9], d[3]],
+            [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]]
+        ], dtype=np.float32)
+        self.k_bandpass9_norm = self.k_bandpass9 / (np.sum(np.abs(self.k_bandpass9)) + 1e-6) * 4.0
+
+        # 2. 5x5 同心帶通卷積核 (僅需 5 條 Line Buffer，SRAM 減省 44.4%，25 次 MAC 減省 69.1%)
+        # 中心補償至 208 使總和恰好為 0 (零直流偏置，徹底消除低頻不均勻光暈)
+        self.k_bandpass5 = np.array([
+            [-5, -11, -17, -11, -5],
+            [-11, -15,   7, -15, -11],
+            [-17,   7, 208,   7, -17],
+            [-11, -15,   7, -15, -11],
+            [-5, -11, -17, -11, -5]
+        ], dtype=np.float32)
+        self.k_bandpass5_norm = self.k_bandpass5 / (np.sum(np.abs(self.k_bandpass5)) + 1e-6) * 4.0
+
+        # 3. 5x5 可分離 1D 卷積分解 (SVD Rank-1 逼近，運算量降至 5+5=10 MAC，節省 87.7% 算力)
+        v_sep = np.array([1.160315, -0.524294, -14.422272, -0.524294, 1.160315], dtype=np.float32)
+        sep_2d = np.outer(v_sep, v_sep)
+        scale = math.sqrt(4.0 / (np.sum(np.abs(sep_2d)) + 1e-6))
+        self.k_bandpass5_1d = v_sep * scale
 
         # OptNavi.cpp 4-Corner 紋理對齊卷積核 (打破滑鼠墊經緯編織 repeat pattern)
         self.k_cor000 = np.array([
@@ -86,6 +123,35 @@ class NormalModeTracker:
         if self.fpn_model is not None:
             return raw_frame.astype(np.float32) - self.fpn_model
         return raw_frame.astype(np.float32)
+
+    def apply_bandpass_filter(self, frame):
+        """
+        帶通濾波器前處理：凸顯微米微塵顆粒邊緣並濾除低頻光暈漸變。
+        支援：
+          - 'bandpass5'     : 5x5 同心核 (推薦！5 條 Line Buffer, 25 MAC, SRAM 節省 44%)
+          - 'bandpass5_sep' : 5x5 可分離 1D 水平+1D 垂直卷積 (5 條 Line Buffer, 10 MAC, 節省 88% 算力)
+          - 'bandpass9'     : 9x9 同心核 (9 條 Line Buffer, 81 MAC)
+        """
+        if self.bandpass_type == 'bandpass5':
+            return convolve2d(frame, self.k_bandpass5_norm, mode='same', boundary='symm')
+        elif self.bandpass_type == 'bandpass5_sep':
+            v_kernel = self.k_bandpass5_1d.reshape(-1, 1)
+            h_kernel = self.k_bandpass5_1d.reshape(1, -1)
+            tmp = convolve2d(frame, v_kernel, mode='same', boundary='symm')
+            return convolve2d(tmp, h_kernel, mode='same', boundary='symm')
+        elif self.bandpass_type == 'bandpass9':
+            return convolve2d(frame, self.k_bandpass9_norm, mode='same', boundary='symm')
+        else:
+            return frame
+
+    def preprocess_frame(self, raw_frame):
+        """影像前處理標準管線：FPN 減除 -> 9x9 帶通增強 (可選) -> 4-Corner 紋理對齊 (可選)"""
+        cur_frame = self.remove_fpn(raw_frame)
+        if self.use_bandpass_filter:
+            cur_frame = self.apply_bandpass_filter(cur_frame)
+        if self.use_corner_filter:
+            cur_frame = self.apply_corner_filter(cur_frame)
+        return cur_frame
 
     def apply_corner_filter(self, frame):
         """
@@ -180,6 +246,40 @@ class NormalModeTracker:
         offset = num / den
         return max(-0.5, min(0.5, offset))
 
+    def parabolic_2d(self, patch):
+        """
+        步驟 5 (升級版): 2D 橢圓拋物面最小平方法峰值解析解
+        在 3x3 互相關曲面上擬合二元二次曲面: z(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y
+        考慮對角交叉耦合項 a5*x*y，徹底消除獨立 1D 拋物線在斜向圓弧運動下的幾何咬合偏差 (Peak-Locking Bias)。
+        """
+        z = patch
+        a1 = float(np.sum(z[:, 2] - z[:, 0]) / 6.0)
+        a2 = float(np.sum(z[2, :] - z[0, :]) / 6.0)
+        a3 = float(np.sum(z[:, 2] + z[:, 0] - 2.0 * z[:, 1]) / 6.0)
+        a4 = float(np.sum(z[2, :] + z[0, :] - 2.0 * z[1, :]) / 6.0)
+        a5 = float((z[2, 2] - z[2, 0] - z[0, 2] + z[0, 0]) / 4.0)
+
+        det = 4.0 * a3 * a4 - a5 * a5
+        if det <= 1e-6 or a3 >= 0 or a4 >= 0:
+            return 0.0, 0.0
+
+        dx = (-2.0 * a4 * a1 + a5 * a2) / det
+        dy = (-2.0 * a3 * a2 + a5 * a1) / det
+        return max(-0.5, min(0.5, dx)), max(-0.5, min(0.5, dy))
+
+    def compute_subpixel_offset(self, surface, v_idx, u_idx):
+        """依據 subpixel_method 計算次像素峰值位移 (dx_sub, dy_sub)"""
+        r = self.r
+        if not (0 < u_idx < 2*r and 0 < v_idx < 2*r):
+            return 0.0, 0.0
+        if self.subpixel_method == 'parabolic_2d':
+            patch = surface[v_idx-1:v_idx+2, u_idx-1:u_idx+2]
+            return self.parabolic_2d(patch)
+        else:
+            dx_sub = self.parabolic_interpolate(surface[v_idx, u_idx-1], surface[v_idx, u_idx], surface[v_idx, u_idx+1])
+            dy_sub = self.parabolic_interpolate(surface[v_idx-1, u_idx], surface[v_idx, u_idx], surface[v_idx+1, u_idx])
+            return dx_sub, dy_sub
+
     def update_keyframe_if_needed(self, cur_frame, frame_idx, squal):
         """
         步驟 7: 紋理閘控參考幀更新機制 (含最大距離強制換幀保護)
@@ -219,9 +319,7 @@ class NormalModeTracker:
 
     def step(self, raw_frame, frame_idx):
         """自主模式單幀處理主流程"""
-        cur_frame = self.remove_fpn(raw_frame)
-        if self.use_corner_filter:
-            cur_frame = self.apply_corner_filter(cur_frame)
+        cur_frame = self.preprocess_frame(raw_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:
@@ -255,11 +353,7 @@ class NormalModeTracker:
         dx_int = px + (u_idx - r)
         dy_int = py + (v_idx - r)
 
-        dx_sub, dy_sub = 0.0, 0.0
-        if 0 < u_idx < 2*r:
-            dx_sub = self.parabolic_interpolate(surface[v_idx, u_idx-1], surface[v_idx, u_idx], surface[v_idx, u_idx+1])
-        if 0 < v_idx < 2*r:
-            dy_sub = self.parabolic_interpolate(surface[v_idx-1, u_idx], surface[v_idx, u_idx], surface[v_idx+1, u_idx])
+        dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
 
         dx_tot = dx_int + dx_sub
         dy_tot = dy_int + dy_sub
@@ -313,9 +407,7 @@ class TeacherModeTracker(NormalModeTracker):
         self.ref_gth = None
 
     def step(self, raw_frame, frame_idx, gth_pos, gth_vel):
-        cur_frame = self.remove_fpn(raw_frame)
-        if self.use_corner_filter:
-            cur_frame = self.apply_corner_filter(cur_frame)
+        cur_frame = self.preprocess_frame(raw_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:
@@ -362,9 +454,6 @@ class TeacherModeTracker(NormalModeTracker):
             py = int(round(true_rel_y))
             self.v_x = gth_vel[0]
             self.v_y = gth_vel[1]
-            # 強制將累積漂移校正回真值
-            self.global_x = gth_pos[0] - self.last_dx_rel + pred_dx_rel
-            self.global_y = gth_pos[1] - self.last_dy_rel + pred_dy_rel
 
         # 相關匹配
         surface = self.compute_correlation_surface(cur_frame, self.ref_frame, px, py)
@@ -376,11 +465,7 @@ class TeacherModeTracker(NormalModeTracker):
         dx_int = px + (u_idx - r)
         dy_int = py + (v_idx - r)
 
-        dx_sub, dy_sub = 0.0, 0.0
-        if 0 < u_idx < 2*r:
-            dx_sub = self.parabolic_interpolate(surface[v_idx, u_idx-1], surface[v_idx, u_idx], surface[v_idx, u_idx+1])
-        if 0 < v_idx < 2*r:
-            dy_sub = self.parabolic_interpolate(surface[v_idx-1, u_idx], surface[v_idx, u_idx], surface[v_idx+1, u_idx])
+        dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
 
         dx_tot = dx_int + dx_sub
         dy_tot = dy_int + dy_sub
@@ -394,8 +479,14 @@ class TeacherModeTracker(NormalModeTracker):
         # 速度更新 (防污染過濾)
         self.update_velocity_filter(frame_dx, frame_dy)
 
-        self.global_x += frame_dx
-        self.global_y += frame_dy
+        if teacher_intervened:
+            # 老師介入時：將全局累積座標精確同步回 (參考幀真值 + 感測器實測位移)，徹底消除歷史累積漂移
+            self.global_x = self.ref_gth[0] + dx_q
+            self.global_y = self.ref_gth[1] + dy_q
+        else:
+            self.global_x += frame_dx
+            self.global_y += frame_dy
+
         self.last_dx_rel = dx_q
         self.last_dy_rel = dy_q
 
@@ -428,15 +519,18 @@ class IdealModeTracker(NormalModeTracker):
       - 永遠以 Ground Truth 相對於參考幀的真實位移作為搜尋中心。
       - 解耦預測誤差，單純檢驗特徵相關比對能力。
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ref_gth = None
+
     def step(self, raw_frame, frame_idx, gth_pos, gth_vel):
-        cur_frame = self.remove_fpn(raw_frame)
-        if self.use_corner_filter:
-            cur_frame = self.apply_corner_filter(cur_frame)
+        cur_frame = self.preprocess_frame(raw_frame)
         squal = self.compute_squal(cur_frame)
 
         if self.ref_frame is None:
             self.ref_frame = cur_frame
             self.ref_idx = frame_idx
+            self.ref_gth = (gth_pos[0], gth_pos[1])
             self.global_x = gth_pos[0]
             self.global_y = gth_pos[1]
             return {
@@ -452,11 +546,9 @@ class IdealModeTracker(NormalModeTracker):
                 'ref_idx': self.ref_idx
             }
 
-        # 永遠鎖定真值為中心
-        ref_origin_x = self.global_x - self.last_dx_rel
-        ref_origin_y = self.global_y - self.last_dy_rel
-        px = int(round(gth_pos[0] - ref_origin_x))
-        py = int(round(gth_pos[1] - ref_origin_y))
+        # 永遠鎖定真值相對位移為搜尋中心 (徹底解耦預測誤差)
+        px = int(round(gth_pos[0] - self.ref_gth[0]))
+        py = int(round(gth_pos[1] - self.ref_gth[1]))
 
         surface = self.compute_correlation_surface(cur_frame, self.ref_frame, px, py)
 
@@ -467,11 +559,7 @@ class IdealModeTracker(NormalModeTracker):
         dx_int = px + (u_idx - r)
         dy_int = py + (v_idx - r)
 
-        dx_sub, dy_sub = 0.0, 0.0
-        if 0 < u_idx < 2*r:
-            dx_sub = self.parabolic_interpolate(surface[v_idx, u_idx-1], surface[v_idx, u_idx], surface[v_idx, u_idx+1])
-        if 0 < v_idx < 2*r:
-            dy_sub = self.parabolic_interpolate(surface[v_idx-1, u_idx], surface[v_idx, u_idx], surface[v_idx+1, u_idx])
+        dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
 
         dx_tot = dx_int + dx_sub
         dy_tot = dy_int + dy_sub
@@ -490,7 +578,8 @@ class IdealModeTracker(NormalModeTracker):
         self.last_dx_rel = dx_q
         self.last_dy_rel = dy_q
 
-        self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
+        if self.update_keyframe_if_needed(cur_frame, frame_idx, squal):
+            self.ref_gth = (gth_pos[0], gth_pos[1])
 
         return {
             'frame': frame_idx,

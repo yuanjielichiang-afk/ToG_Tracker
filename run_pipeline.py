@@ -154,12 +154,15 @@ def main():
     for f in os.listdir(exp_dir):
         src_f = os.path.join(exp_dir, f)
         if os.path.isfile(src_f):
-            if f.startswith('step1_') or f.startswith('fpn_') or f.startswith('sample_') or f.endswith('.raw'):
-                shutil.copy2(src_f, os.path.join(legacy_s1, f))
-            if f.endswith('_ground_truth.csv') or f.startswith('gth_') or f.startswith('step2_'):
-                shutil.copy2(src_f, os.path.join(legacy_s2, f))
-            if f.startswith('Track_') or f.startswith('step3_') or f.endswith('.html') or f.startswith('trajectory_') or f.startswith('tracking_') or f.startswith('mismatch_'):
-                shutil.copy2(src_f, os.path.join(legacy_s3, f))
+            try:
+                if f.startswith('step1_') or f.startswith('fpn_') or f.startswith('sample_') or f.endswith('.raw'):
+                    shutil.copy2(src_f, os.path.join(legacy_s1, f))
+                if f.endswith('_ground_truth.csv') or f.startswith('gth_') or f.startswith('step2_'):
+                    shutil.copy2(src_f, os.path.join(legacy_s2, f))
+                if f.startswith('Track_') or f.startswith('step3_') or f.endswith('.html') or f.startswith('trajectory_') or f.startswith('tracking_') or f.startswith('mismatch_'):
+                    shutil.copy2(src_f, os.path.join(legacy_s3, f))
+            except PermissionError:
+                pass
 
     print("\n" + "=" * 75)
     print(f"🎉 測試完成！所有結果已妥善獨立歸檔（不同序列絕不覆蓋）：")

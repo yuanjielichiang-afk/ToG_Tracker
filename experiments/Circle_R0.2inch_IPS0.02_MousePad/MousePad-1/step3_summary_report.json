@@ -1,16 +1,16 @@
 {
   "normal": {
     "total_frames": 5185,
-    "final_drift_px": 9.517484223259842,
-    "max_ate_px": 31.45509034448956,
-    "mean_ate_px": 17.645995957040697,
-    "in_basin_rate_all": 2.0250723240115716,
-    "in_basin_rate_texture_zone": 2.0250723240115716,
+    "final_drift_px": 7.3875198605486,
+    "max_ate_px": 38.60118380360892,
+    "mean_ate_px": 18.046938048168258,
+    "in_basin_rate_all": 2.005785920925747,
+    "in_basin_rate_texture_zone": 2.005785920925747,
     "mismatch_interventions_count": 0,
-    "inst_dx_rmse_px": 0.22238864861712526,
-    "inst_dy_rmse_px": 0.21509200440445733,
-    "inst_speed_rmse_px": 0.3093885605391355,
-    "inst_speed_rmse_textured_px": 0.3093885605391355
+    "inst_dx_rmse_px": 0.21990149530947775,
+    "inst_dy_rmse_px": 0.21552459650613456,
+    "inst_speed_rmse_px": 0.30790829696270994,
+    "inst_speed_rmse_textured_px": 0.30790829696270994
   },
   "teacher": {
     "total_frames": 5185,
