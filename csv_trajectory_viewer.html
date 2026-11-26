@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ToG CSV 軌跡互動檢視與量化比較器</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --accent: #059669;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); }
+  .badge { font-size: 11px; background: #eff6ff; color: var(--primary); padding: 3px 8px; border-radius: 999px; border: 1px solid #bfdbfe; font-weight: 600; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  button, .btn-label {
+    font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+    transition: all 0.15s;
+  }
+  button:hover, .btn-label:hover { background: #f1f5f9; border-color: #cbd5e1; }
+  button.primary, .btn-label.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  button.primary:hover, .btn-label.primary:hover { background: var(--primary-hover); }
+  button.success { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.success:hover { background: #047857; }
+  .chk-pill {
+    font-size: 12px; display: inline-flex; align-items: center; gap: 5px;
+    background: #f1f5f9; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
+  }
+  .workspace { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 390px; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .drop-zone {
+    margin: 12px; padding: 14px; border: 2px dashed #94a3b8; border-radius: 8px;
+    text-align: center; background: #f8fafc; font-size: 12px; color: var(--muted);
+    transition: all 0.15s; cursor: pointer;
+  }
+  .drop-zone.dragover { border-color: var(--primary); background: #eff6ff; color: var(--primary); }
+  .track-list { flex: 1; overflow-y: auto; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .track-card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #fff;
+    border-left-width: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  }
+  .track-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+  .track-name { font-size: 13px; font-weight: 700; word-break: break-all; display: flex; align-items: center; gap: 6px; }
+  .fmt-tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #f1f5f9; color: #475569; font-weight: 600; }
+  .metrics-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    background: #f8fafc; padding: 7px; border-radius: 6px; font-size: 11px; margin-bottom: 6px;
+  }
+  .metric-cell span { display: block; color: var(--muted); font-size: 10px; }
+  .metric-cell strong { font-family: "Consolas", monospace; font-size: 12px; color: var(--text); }
+  .transform-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 4px;
+  }
+  .transform-row input[type="number"] {
+    width: 58px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;
+  }
+  .meta-box {
+    margin-top: 8px; padding: 8px; background: #0f172a; color: #e2e8f0; border-radius: 6px;
+    font-family: "Consolas", monospace; font-size: 10.5px; line-height: 1.45;
+    white-space: pre-wrap; max-height: 180px; overflow-y: auto; display: none;
+  }
+  .meta-box.open { display: block; }
+  .canvas-area { flex: 1; position: relative; display: flex; flex-direction: column; min-width: 0; background: #ffffff; }
+  canvas { flex: 1; width: 100%; height: 100%; display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .hover-card {
+    position: absolute; pointer-events: none; background: rgba(15, 23, 42, 0.92); color: #fff;
+    padding: 8px 10px; border-radius: 6px; font-size: 11.5px; font-family: "Consolas", monospace;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2); display: none; z-index: 20; line-height: 1.5;
+  }
+  .timeline-bar {
+    background: var(--panel); border-top: 1px solid var(--border); padding: 8px 16px;
+    display: flex; align-items: center; gap: 12px; font-size: 12px;
+  }
+  .timeline-bar input[type="range"] { flex: 1; }
+  .btn-mini { padding: 2px 7px; font-size: 10.5px; }
+  .btn-mini.active { background: #dbeafe; border-color: var(--primary); color: var(--primary); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>ToG 光學滑鼠 CSV 軌跡與 Metadata 互動檢視器</h1>
+    <span class="badge">離線零依賴 / 支援 UTF-8 BOM 與 P3950</span>
+  </div>
+  <div class="toolbar">
+    <label class="btn-label primary">
+      + 載入 CSV 軌跡 (可複選)
+      <input id="fileInput" type="file" multiple accept=".csv,.txt" style="display:none" />
+    </label>
+    <label class="chk-pill"><input id="chkCircleFit" type="checkbox" checked /> 顯示 Kasa 擬合正圓虛線</label>
+    <label class="chk-pill"><input id="chkPoints" type="checkbox" /> 顯示 Start/End 標記</label>
+    <button id="btnZoomOut">縮小 (-)</button>
+    <button id="btnZoomIn">放大 (+)</button>
+    <button id="btnResetView">重設 1:1 視角</button>
+    <button id="btnExportPng" class="success">匯出 PNG 截圖</button>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside>
+    <div id="dropZone" class="drop-zone">
+      <strong>拖放一個或多個 .csv 檔案到此處</strong><br/>
+      支援：新版 Track_B_NormalMode.csv（含 # FEATURE_GENERATION 標頭）、GTH CSV、及原廠 P3950 無標頭 (dx, dy) CSV
+    </div>
+    <div id="trackList" class="track-list"></div>
+  </aside>
+
+  <div class="canvas-area">
+    <canvas id="trackCanvas"></canvas>
+    <div id="hoverCard" class="hover-card"></div>
+    <div class="timeline-bar">
+      <button id="btnPlay" class="btn-mini">▶ 播放軌跡</button>
+      <span style="font-weight:600; color:var(--muted);">時間進度回放：</span>
+      <input id="frameSlider" type="range" min="1" max="100" value="100" />
+      <span id="sliderLabel" style="font-family:Consolas,monospace; min-width:85px; text-align:right;">100%</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#db2777"];
+let tracks = [];
+let baselineId = null;
+let nextId = 1;
+let scale = 2.0;
+let offset = { x: 400, y: 300 };
+let isDragging = false;
+let lastMouse = { x: 0, y: 0 };
+let hoverInfo = null;
+let progressPct = 100;
+let playTimer = null;
+
+const canvas = document.getElementById("trackCanvas");
+const ctx = canvas.getContext("2d");
+const trackListEl = document.getElementById("trackList");
+const hoverCard = document.getElementById("hoverCard");
+const frameSlider = document.getElementById("frameSlider");
+const sliderLabel = document.getElementById("sliderLabel");
+
+function fitKasaCircle(pts) {
+  if (pts.length < 10) return { xc: 0, yc: 0, r: 0, radialRmse: 0, aspect: 1 };
+  let sx = 0, sy = 0, sx2 = 0, sy2 = 0, sxy = 0, sx3 = 0, sy3 = 0, sx2y = 0, sxy2 = 0;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const n = pts.length;
+  for (const p of pts) {
+    const x = p.x, y = p.y;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    const x2 = x * x, y2 = y * y;
+    sx += x; sy += y; sx2 += x2; sy2 += y2; sxy += x * y;
+    sx3 += x2 * x; sy3 += y2 * y; sx2y += x2 * y; sxy2 += x * y2;
+  }
+  const mx = sx / n, my = sy / n;
+  // Center coordinates before Kasa solve for numerical stability
+  let Suu = 0, Svv = 0, Suv = 0, Suuu = 0, Svvv = 0, Suvv = 0, Svuu = 0;
+  for (const p of pts) {
+    const u = p.x - mx, v = p.y - my;
+    const u2 = u * u, v2 = v * v;
+    Suu += u2; Svv += v2; Suv += u * v;
+    Suuu += u2 * u; Svvv += v2 * v; Suvv += u * v2; Svuu += v * u2;
+  }
+  const det = Suu * Svv - Suv * Suv;
+  let xc = mx, yc = my, r = 0;
+  if (Math.abs(det) > 1e-9 && (maxX - minX > 1 || maxY - minY > 1)) {
+    const rhs1 = 0.5 * (Suuu + Suvv);
+    const rhs2 = 0.5 * (Svvv + Svuu);
+    const uc = (rhs1 * Svv - rhs2 * Suv) / det;
+    const vc = (Suu * rhs2 - Suv * rhs1) / det;
+    xc = mx + uc;
+    yc = my + vc;
+    r = Math.sqrt(Math.max(0, uc * uc + vc * vc + (Suu + Svv) / n));
+  }
+  let sqErr = 0;
+  for (const p of pts) {
+    const d = Math.hypot(p.x - xc, p.y - yc) - r;
+    sqErr += d * d;
+  }
+  const radialRmse = Math.sqrt(sqErr / n);
+  const aspect = (maxX - minX) / (Math.max(1e-6, maxY - minY));
+  return { xc, yc, r, radialRmse, aspect };
+}
+
+function parseCsvText(filename, text) {
+  const cleanText = text.replace(/^\uFEFF/, "");
+  const lines = cleanText.split(/\r?\n/);
+  const comments = [];
+  const dataLines = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith("#")) {
+      comments.push(line.slice(1).trim());
+    } else {
+      dataLines.push(line);
+    }
+  }
+  if (dataLines.length === 0) return null;
+
+  const firstTokens = dataLines[0].split(/[,\s]+/).filter(Boolean);
+  const isNumericRow = firstTokens.every(tok => !isNaN(Number(tok)));
+
+  let rawPoints = [];
+  let formatLabel = "Standard CSV";
+
+  if (!isNumericRow) {
+    const headers = dataLines[0].split(",").map(s => s.trim().toLowerCase());
+    const idxFrame = headers.findIndex(h => h === "frame" || h === "frame_idx");
+    const idxDx = headers.findIndex(h => h === "dx" || h === "dx_px");
+    const idxDy = headers.findIndex(h => h === "dy" || h === "dy_px");
+    const idxX = headers.findIndex(h => h === "x" || h === "x_px");
+    const idxY = headers.findIndex(h => h === "y" || h === "y_px");
+    const idxSqual = headers.findIndex(h => h === "squal");
+    formatLabel = (idxX >= 0 && idxY >= 0) ? (comments.length ? "ToG Normal CSV" : "GTH/Eval CSV") : "Header dx/dy CSV";
+
+    let accX = 0, accY = 0;
+    for (let i = 1; i < dataLines.length; i++) {
+      const cols = dataLines[i].split(",").map(s => Number(s.trim()));
+      if (cols.length < 2 || cols.some(v => isNaN(v))) continue;
+      const dx = idxDx >= 0 ? cols[idxDx] : 0;
+      const dy = idxDy >= 0 ? cols[idxDy] : 0;
+      let x, y;
+      if (idxX >= 0 && idxY >= 0) {
+        x = cols[idxX]; y = cols[idxY];
+      } else {
+        accX += dx; accY += dy; x = accX; y = accY;
+      }
+      rawPoints.push({
+        frame: idxFrame >= 0 ? cols[idxFrame] : i - 1,
+        dx, dy, x, y,
+        squal: idxSqual >= 0 ? cols[idxSqual] : null
+      });
+    }
+  } else {
+    formatLabel = "P3950 Raw (dx,dy)";
+    let accX = 0, accY = 0;
+    for (let i = 0; i < dataLines.length; i++) {
+      const cols = dataLines[i].split(/[,\s]+/).map(s => Number(s));
+      if (cols.length < 2 || isNaN(cols[0]) || isNaN(cols[1])) continue;
+      const dx = cols[0], dy = cols[1];
+      accX += dx; accY += dy;
+      rawPoints.push({ frame: i, dx, dy, x: accX, y: accY, squal: null });
+    }
+  }
+  if (rawPoints.length === 0) return null;
+
+  const color = PALETTE[(nextId - 1) % PALETTE.length];
+  const trk = {
+    id: nextId++,
+    name: filename,
+    format: formatLabel,
+    color,
+    visible: true,
+    comments,
+    rawPoints,
+    scaleFactor: 1.0,
+    rotDeg: 0.0,
+    flipX: false,
+    flipY: false,
+    points: [],
+    stats: null
+  };
+  applyTransform(trk);
+  return trk;
+}
+
+function applyTransform(trk) {
+  const rad = trk.rotDeg * Math.PI / 180.0;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  const fx = trk.flipX ? -1 : 1, fy = trk.flipY ? -1 : 1;
+  const k = trk.scaleFactor;
+  trk.points = trk.rawPoints.map(p => {
+    const ux = p.x * k * fx;
+    const uy = p.y * k * fy;
+    return {
+      frame: p.frame,
+      dx: p.dx * k * fx,
+      dy: p.dy * k * fy,
+      x: ux * c - uy * s,
+      y: ux * s + uy * c,
+      squal: p.squal
+    };
+  });
+  const pts = trk.points;
+  const last = pts[pts.length - 1];
+  const eClose = Math.hypot(last.x - pts[0].x, last.y - pts[0].y);
+  const kasa = fitKasaCircle(pts);
+  trk.stats = {
+    nFrames: pts.length,
+    eClose,
+    rFit: kasa.r,
+    xc: kasa.xc,
+    yc: kasa.yc,
+    radialRmse: kasa.radialRmse,
+    aspect: kasa.aspect,
+    globalRmse: null
+  };
+}
+
+function recomputeGlobalRmse() {
+  const base = tracks.find(t => t.id === baselineId);
+  for (const t of tracks) {
+    if (!base) {
+      t.stats.globalRmse = null;
+      continue;
+    }
+    if (t.id === base.id) {
+      t.stats.globalRmse = 0.0;
+      continue;
+    }
+    const A = t.points;
+    const B = base.points;
+    if (A.length === B.length) {
+      let sumSq = 0;
+      for (let i = 0; i < A.length; i++) {
+        const dx = A[i].x - B[i].x, dy = A[i].y - B[i].y;
+        sumSq += dx * dx + dy * dy;
+      }
+      t.stats.globalRmse = Math.sqrt(sumSq / A.length);
+    } else {
+      // Uniform index resampling when lengths differ (e.g. P3950 vs RAW)
+      let sumSq = 0;
+      for (let i = 0; i < A.length; i++) {
+        const idxB = Math.min(B.length - 1, Math.round(i * (B.length - 1) / Math.max(1, A.length - 1)));
+        const dx = A[i].x - B[idxB].x, dy = A[i].y - B[idxB].y;
+        sumSq += dx * dx + dy * dy;
+      }
+      t.stats.globalRmse = Math.sqrt(sumSq / A.length);
+    }
+  }
+}
+
+function fitView() {
+  const pts = tracks.filter(t => t.visible).flatMap(t => t.points);
+  if (pts.length === 0) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const w = canvas.width || 800, h = canvas.height || 600;
+  const spanX = Math.max(10, maxX - minX);
+  const spanY = Math.max(10, maxY - minY);
+  scale = Math.min((w - 100) / spanX, (h - 100) / spanY);
+  offset.x = w / 2 - ((minX + maxX) / 2) * scale;
+  offset.y = h / 2 + ((minY + maxY) / 2) * scale;
+  draw();
+}
+
+function chooseNiceStep(targetWorld) {
+  const exp = Math.floor(Math.log10(targetWorld));
+  const f = targetWorld / Math.pow(10, exp);
+  const nice = f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10;
+  return nice * Math.pow(10, exp);
+}
+
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  if (!w || !h) return;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+
+  // 1:1 coordinate grid
+  const step = chooseNiceStep(90 / scale);
+  const xMinW = (0 - offset.x) / scale, xMaxW = (w - offset.x) / scale;
+  const yMaxW = (offset.y - 0) / scale, yMinW = (offset.y - h) / scale;
+
+  ctx.strokeStyle = "#f1f5f9";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "11px Consolas, monospace";
+
+  const startX = Math.floor(xMinW / step) * step;
+  for (let gx = startX; gx <= xMaxW; gx += step) {
+    const sx = offset.x + gx * scale;
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke();
+    ctx.fillText(Math.abs(gx) < 1e-6 ? "0" : gx.toFixed(step < 1 ? 1 : 0), sx + 3, h - 6);
+  }
+  const startY = Math.floor(yMinW / step) * step;
+  for (let gy = startY; gy <= yMaxW; gy += step) {
+    const sy = offset.y - gy * scale;
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
+    ctx.fillText(Math.abs(gy) < 1e-6 ? "0" : gy.toFixed(step < 1 ? 1 : 0), 6, sy - 3);
+  }
+
+  // Origin axes
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(offset.x, 0); ctx.lineTo(offset.x, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, offset.y); ctx.lineTo(w, offset.y); ctx.stroke();
+
+  const showFit = document.getElementById("chkCircleFit").checked;
+  const showPts = document.getElementById("chkPoints").checked;
+
+  for (const t of tracks) {
+    if (!t.visible || t.points.length === 0) continue;
+
+    if (showFit && t.stats.rFit > 1) {
+      ctx.save();
+      ctx.strokeStyle = t.color;
+      ctx.globalAlpha = 0.28;
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.arc(offset.x + t.stats.xc * scale, offset.y - t.stats.yc * scale, t.stats.rFit * scale, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    const limit = Math.max(1, Math.floor((t.points.length * progressPct) / 100));
+    ctx.strokeStyle = t.color;
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    for (let i = 0; i < limit; i++) {
+      const sx = offset.x + t.points[i].x * scale;
+      const sy = offset.y - t.points[i].y * scale;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+
+    if (showPts || progressPct < 100) {
+      const p0 = t.points[0];
+      const pEnd = t.points[limit - 1];
+      ctx.fillStyle = "#10b981";
+      ctx.beginPath(); ctx.arc(offset.x + p0.x * scale, offset.y - p0.y * scale, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = t.color;
+      ctx.fillRect(offset.x + pEnd.x * scale - 4, offset.y - pEnd.y * scale - 4, 8, 8);
+    }
+  }
+
+  if (hoverInfo) {
+    const sx = offset.x + hoverInfo.p.x * scale;
+    const sy = offset.y - hoverInfo.p.y * scale;
+    ctx.fillStyle = hoverInfo.color;
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+}
+
+function renderSidebar() {
+  recomputeGlobalRmse();
+  trackListEl.innerHTML = "";
+  for (const t of tracks) {
+    const s = t.stats;
+    const isBase = (t.id === baselineId);
+    const card = document.createElement("div");
+    card.className = "track-card";
+    card.style.borderLeftColor = t.color;
+    const rmseStr = s.globalRmse === null ? "未設基準" : `${s.globalRmse.toFixed(2)} px`;
+
+    card.innerHTML = `
+      <div class="track-head">
+        <div class="track-name">
+          <input type="checkbox" ${t.visible ? "checked" : ""} data-act="vis" />
+          <span style="color:${t.color}">${t.name}</span>
+          <span class="fmt-tag">${t.format}</span>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="btn-mini ${isBase ? "active" : ""}" data-act="base">${isBase ? "★基準" : "設為基準"}</button>
+          <button class="btn-mini" data-act="del" style="color:#dc2626;">✕</button>
+        </div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric-cell"><span>總幀數</span><strong>${s.nFrames}</strong></div>
+        <div class="metric-cell"><span>閉環 E_close</span><strong>${s.eClose.toFixed(2)} px</strong></div>
+        <div class="metric-cell"><span>擬合半徑 R_fit</span><strong>${s.rFit.toFixed(2)} px</strong></div>
+        <div class="metric-cell"><span>圓度 RadRMSE</span><strong>${s.radialRmse.toFixed(2)} px</strong></div>
+        <div class="metric-cell"><span>長寬比 X/Y</span><strong>${s.aspect.toFixed(3)}</strong></div>
+        <div class="metric-cell"><span>全域誤差 RMSE</span><strong style="color:${s.globalRmse !== null ? "#2563eb" : "#94a3b8"}">${rmseStr}</strong></div>
+      </div>
+      <div class="transform-row">
+        尺度:<input type="number" step="0.01" value="${t.scaleFactor}" data-act="scale" />
+        旋轉°:<input type="number" step="5" value="${t.rotDeg}" data-act="rot" />
+        <label><input type="checkbox" ${t.flipX ? "checked" : ""} data-act="fx" /> 翻X</label>
+        <label><input type="checkbox" ${t.flipY ? "checked" : ""} data-act="fy" /> 翻Y</label>
+        <button class="btn-mini" data-act="meta" style="margin-left:auto;">Metadata (${t.comments.length}行)</button>
+      </div>
+      <div class="meta-box">${t.comments.length ? t.comments.join("\n") : "(此檔案無 # 註解標頭)"}</div>
+    `;
+
+    card.querySelector('[data-act="vis"]').onchange = (e) => { t.visible = e.target.checked; draw(); };
+    card.querySelector('[data-act="base"]').onclick = () => { baselineId = isBase ? null : t.id; renderSidebar(); draw(); };
+    card.querySelector('[data-act="del"]').onclick = () => {
+      tracks = tracks.filter(x => x.id !== t.id);
+      if (baselineId === t.id) baselineId = tracks.length ? tracks[0].id : null;
+      renderSidebar(); draw();
+    };
+    const updateTf = () => { applyTransform(t); renderSidebar(); draw(); };
+    card.querySelector('[data-act="scale"]').onchange = (e) => { t.scaleFactor = Number(e.target.value) || 1; updateTf(); };
+    card.querySelector('[data-act="rot"]').onchange = (e) => { t.rotDeg = Number(e.target.value) || 0; updateTf(); };
+    card.querySelector('[data-act="fx"]').onchange = (e) => { t.flipX = e.target.checked; updateTf(); };
+    card.querySelector('[data-act="fy"]').onchange = (e) => { t.flipY = e.target.checked; updateTf(); };
+    card.querySelector('[data-act="meta"]').onclick = () => { card.querySelector(".meta-box").classList.toggle("open"); };
+    trackListEl.appendChild(card);
+  }
+}
+
+async function handleFiles(fileList) {
+  let added = 0;
+  for (const file of fileList) {
+    const txt = await file.text();
+    const trk = parseCsvText(file.name, txt);
+    if (trk) {
+      tracks.push(trk);
+      if (baselineId === null) baselineId = trk.id;
+      added++;
+    }
+  }
+  if (added > 0) {
+    renderSidebar();
+    fitView();
+  }
+}
+
+document.getElementById("fileInput").onchange = (e) => handleFiles(e.target.files);
+const dropZone = document.getElementById("dropZone");
+dropZone.onclick = () => document.getElementById("fileInput").click();
+dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add("dragover"); };
+dropZone.ondragleave = () => dropZone.classList.remove("dragover");
+dropZone.ondrop = (e) => { e.preventDefault(); dropZone.classList.remove("dragover"); handleFiles(e.dataTransfer.files); };
+document.body.ondragover = (e) => e.preventDefault();
+document.body.ondrop = (e) => { e.preventDefault(); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); };
+
+canvas.onmousedown = (e) => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; };
+window.onmouseup = () => { isDragging = false; };
+canvas.onmousemove = (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  if (isDragging) {
+    offset.x += e.clientX - lastMouse.x;
+    offset.y += e.clientY - lastMouse.y;
+    lastMouse = { x: e.clientX, y: e.clientY };
+    draw();
+    return;
+  }
+  const wx = (mx - offset.x) / scale, wy = (offset.y - my) / scale;
+  const thresh = 20 / scale;
+  let best = null, bestD = Infinity;
+  for (const t of tracks) {
+    if (!t.visible) continue;
+    for (const p of t.points) {
+      const d = Math.hypot(p.x - wx, p.y - wy);
+      if (d < bestD && d < thresh) { bestD = d; best = { p, color: t.color, name: t.name }; }
+    }
+  }
+  hoverInfo = best;
+  if (best) {
+    hoverCard.style.display = "block";
+    hoverCard.style.left = Math.min(canvas.width - 230, mx + 14) + "px";
+    hoverCard.style.top = Math.max(10, my - 20) + "px";
+    const sq = best.p.squal !== null ? `<br/>SQUAL: ${best.p.squal.toFixed(1)}` : "";
+    hoverCard.innerHTML = `<strong style="color:${best.color}">${best.name}</strong><br/>Frame: ${best.p.frame}<br/>Pos: (${best.p.x.toFixed(2)}, ${best.p.y.toFixed(2)})<br/>Vel: (${best.p.dx.toFixed(3)}, ${best.p.dy.toFixed(3)})${sq}`;
+  } else {
+    hoverCard.style.display = "none";
+  }
+  draw();
+};
+
+canvas.onwheel = (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 0.87;
+  const newScale = Math.max(0.05, Math.min(2000, scale * factor));
+  offset.x = mx - (mx - offset.x) * (newScale / scale);
+  offset.y = my - (my - offset.y) * (newScale / scale);
+  scale = newScale;
+  draw();
+};
+
+document.getElementById("chkCircleFit").onchange = draw;
+document.getElementById("chkPoints").onchange = draw;
+document.getElementById("btnZoomIn").onclick = () => { scale *= 1.3; draw(); };
+document.getElementById("btnZoomOut").onclick = () => { scale /= 1.3; draw(); };
+document.getElementById("btnResetView").onclick = fitView;
+document.getElementById("btnExportPng").onclick = () => {
+  const link = document.createElement("a");
+  link.download = "tog_csv_trajectory_compare.png";
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+};
+frameSlider.oninput = (e) => {
+  progressPct = Number(e.target.value);
+  sliderLabel.textContent = `${progressPct}%`;
+  draw();
+};
+document.getElementById("btnPlay").onclick = () => {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; return; }
+  if (progressPct >= 100) progressPct = 1;
+  playTimer = setInterval(() => {
+    progressPct += 2;
+    if (progressPct >= 100) { progressPct = 100; clearInterval(playTimer); playTimer = null; }
+    frameSlider.value = progressPct;
+    sliderLabel.textContent = `${progressPct}%`;
+    draw();
+  }, 40);
+};
+
+function resizeCanvas() {
+  const area = canvas.parentElement;
+  canvas.width = area.clientWidth;
+  canvas.height = area.clientHeight - 40;
+  if (tracks.length) fitView(); else draw();
+}
+window.onresize = resizeCanvas;
+resizeCanvas();
+</script>
+</body>
+</html>

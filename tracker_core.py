@@ -127,20 +127,15 @@ class NormalModeTracker:
         scale = math.sqrt(4.0 / (np.sum(np.abs(sep_2d)) + 1e-6))
         self.k_bandpass5_1d = v_sep * scale
 
-        # 4. 舊版相容 9x9 同心帶通卷積核 (需要 9 條 Line Buffer, 81 次 MAC)
-        d = [184, 7, -15, -17, -11, -5, -1, -1, 2, 5]
-        self.k_bandpass9 = np.array([
-            [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]],
-            [d[3], d[9], d[8], d[7], d[6], d[7], d[8], d[9], d[3]],
-            [d[2], d[8], d[5], d[4], d[3], d[4], d[5], d[8], d[2]],
-            [d[1], d[7], d[4], d[2], d[1], d[2], d[4], d[7], d[1]],
-            [d[0], d[6], d[3], d[1], d[0], d[1], d[3], d[6], d[0]],
-            [d[1], d[7], d[4], d[2], d[1], d[2], d[4], d[7], d[1]],
-            [d[2], d[8], d[5], d[4], d[3], d[4], d[5], d[8], d[2]],
-            [d[3], d[9], d[8], d[7], d[6], d[7], d[8], d[9], d[3]],
-            [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]]
+        # OptNavi.cpp 原廠對照組核心卷積核: FilterList: box2, saddle3, corner
+        self.k_box2 = np.ones((2, 2), dtype=np.float32)
+        self.k_sad3 = np.array([
+            [-1.0, 0.0,  1.0],
+            [ 0.0, 0.0,  0.0],
+            [ 1.0, 0.0, -1.0]
         ], dtype=np.float32)
-        self.k_bandpass9_norm = self.k_bandpass9 / (np.sum(np.abs(self.k_bandpass9)) + 1e-6) * 4.0
+        comb_raw = convolve2d(self.k_box2, self.k_sad3, mode='full')
+        self.k_optnavi_comb = comb_raw / (np.sum(np.abs(comb_raw)) + 1e-6) * 4.0
 
         # OptNavi.cpp 4-Corner 紋理對齊卷積核 (打破滑鼠墊經緯編織 repeat pattern)
         self.k_cor000 = np.array([
@@ -182,7 +177,7 @@ class NormalModeTracker:
           - 'bandpass7'      : 7x7 同心零均值核 (原廠基準，需 6 條 Line Buffer, 49 MAC)
           - 'bandpass5'      : 5x5 同心零均值核 (需 4 條 Line Buffer, 25 MAC)
           - 'bandpass5_sep'  : 5x5 可分離 1D 水平+1D 垂直卷積 (需 4 條 Line Buffer, 10 MAC)
-          - 'bandpass9'      : 舊版 9x9 帶通核 (需 8 條 Line Buffer, 81 MAC)
+          - 'optnavi_ctrl'   : OptNavi 原廠對照組 (box2 + saddle3 + 4-Corner, AlignFlatBias=0)
         """
         if self.bandpass_type == 'bandpass3x7':
             return convolve2d(frame, self.k_bandpass3x7_norm, mode='valid')
@@ -199,8 +194,9 @@ class NormalModeTracker:
             h_kernel = self.k_bandpass5_1d.reshape(1, -1)
             tmp = convolve2d(frame, v_kernel, mode='same', boundary='symm')
             return convolve2d(tmp, h_kernel, mode='same', boundary='symm')
-        elif self.bandpass_type == 'bandpass9':
-            return convolve2d(frame, self.k_bandpass9_norm, mode='same', boundary='symm')
+        elif self.bandpass_type == 'optnavi_ctrl':
+            flt = convolve2d(frame, self.k_optnavi_comb, mode='valid')
+            return self.apply_corner_filter(flt, mode='valid', flat_bias=0.0)
         else:
             return frame
 
@@ -212,11 +208,11 @@ class NormalModeTracker:
         cur_frame = self.remove_fpn(raw_frame)
         if self.use_bandpass_filter:
             cur_frame = self.apply_bandpass_filter(cur_frame)
-        if self.use_corner_filter:
+        if self.use_corner_filter and self.bandpass_type != 'optnavi_ctrl':
             cur_frame = self.apply_corner_filter(cur_frame)
         return cur_frame
 
-    def apply_corner_filter(self, frame):
+    def apply_corner_filter(self, frame, mode='same', flat_bias=None):
         """
         OptNavi::xSurfaceAlignFilterCorner 實現:
         利用 4 方向 (0°, 45°, 90°, 135°) 二階差分卷積，檢測各方向的紋理響應。
@@ -224,10 +220,15 @@ class NormalModeTracker:
         判定為布質滑鼠墊的經緯編織週期條紋 (1D Repeat Pattern)，
         主動抑制主方向強度，改取最小響應 abs(minAlignVal)，打破週期織紋假峰，消除次像素鋸齒狀跳動。
         """
-        c000 = convolve2d(frame, self.k_cor000, mode='same', boundary='symm')
-        c045 = convolve2d(frame, self.k_cor045, mode='same', boundary='symm')
-        c090 = convolve2d(frame, self.k_cor090, mode='same', boundary='symm')
-        c135 = convolve2d(frame, self.k_cor135, mode='same', boundary='symm')
+        bias = self.corner_flat_bias if flat_bias is None else flat_bias
+        conv_kw = {'mode': mode}
+        if mode == 'same':
+            conv_kw['boundary'] = 'symm'
+
+        c000 = convolve2d(frame, self.k_cor000, **conv_kw)
+        c045 = convolve2d(frame, self.k_cor045, **conv_kw)
+        c090 = convolve2d(frame, self.k_cor090, **conv_kw)
+        c135 = convolve2d(frame, self.k_cor135, **conv_kw)
 
         no_align = (c045 + c135) * 0.5
         cor_stack = np.stack([c000, c045, c090, c135], axis=-1)
@@ -238,7 +239,7 @@ class NormalModeTracker:
         max_val = np.take_along_axis(cor_stack, max_idx[..., None], axis=-1).squeeze(-1)
         min_val = np.take_along_axis(cor_stack, min_idx[..., None], axis=-1).squeeze(-1)
 
-        cond = (np.abs(max_val) - np.abs(min_val)) > (np.abs(no_align) + self.corner_flat_bias)
+        cond = (np.abs(max_val) - np.abs(min_val)) > (np.abs(no_align) + bias)
         surf_align = np.where(cond, np.abs(min_val), no_align)
         return surf_align
 
@@ -329,12 +330,12 @@ class NormalModeTracker:
         return surface
 
     def parabolic_interpolate(self, s1, s2, s3):
-        """步驟 5: 1D 拋物線次像素峰值擬合"""
+        """步驟 5: 1D 拋物線次像素峰值擬合 (僅在開口向下 s1+s3-2*s2 < 0 時內插，避免假谷底反轉跳變)"""
         if not (math.isfinite(s1) and math.isfinite(s2) and math.isfinite(s3)):
             return 0.0
         num = s1 - s3
         den = 2.0 * (s1 + s3 - 2.0 * s2)
-        if abs(den) < 1e-6:
+        if den >= -1e-6:
             return 0.0
         offset = num / den
         return max(-0.5, min(0.5, offset))
@@ -344,6 +345,7 @@ class NormalModeTracker:
         步驟 5 (升級版): 2D 橢圓拋物面最小平方法峰值解析解
         在 3x3 互相關曲面上擬合二元二次曲面: z(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y
         考慮對角交叉耦合項 a5*x*y，徹底消除獨立 1D 拋物線在斜向圓弧運動下的幾何咬合偏差 (Peak-Locking Bias)。
+        若局部曲面呈現單軸平坦或鞍點 (det <= 0 或 a3/a4 >= 0)，安全退回獨立 1D 拋物線擬合以保護圓度。
         """
         z = patch
         a1 = float(np.sum(z[:, 2] - z[:, 0]) / 6.0)
@@ -354,7 +356,9 @@ class NormalModeTracker:
 
         det = 4.0 * a3 * a4 - a5 * a5
         if det <= 1e-6 or a3 >= 0 or a4 >= 0:
-            return 0.0, 0.0
+            dx = self.parabolic_interpolate(z[1, 0], z[1, 1], z[1, 2])
+            dy = self.parabolic_interpolate(z[0, 1], z[1, 1], z[2, 1])
+            return dx, dy
 
         dx = (-2.0 * a4 * a1 + a5 * a2) / det
         dy = (-2.0 * a3 * a2 + a5 * a1) / det
@@ -417,36 +421,45 @@ class NormalModeTracker:
         利用位移後微塵互不相關、而感測器靜態圖案恆定的物理性質：
           E[ F_t(x,y) * F_{t+lag}(x+dx, y+dy) ] == B_S(dy, dx)
         對稱摺疊後僅需 41 個 16-bit 純量 (82 Bytes)，比 1,296 Bytes 整張 FPN 節省 93.7% 面積！
+        確保在 0.005 ips 等超慢速序列上 lag_f 亦足以讓微塵錯開，並採動態差異門檻避免靜止/微動配對污染。
         """
-        lag_f = max(40, total_frames // 30)
+        lag_f = max(60, total_frames // 10)
         if total_frames <= lag_f + 5:
             lag_f = max(1, total_frames // 3)
-        step = max(1, (total_frames - lag_f) // 80)
-        samples_bs = {(dy, dx): [] for dy in range(-max_lag, max_lag + 1) for dx in range(-max_lag, max_lag + 1)}
+        step = max(1, (total_frames - lag_f) // 100)
 
-        for idx in range(0, max(1, total_frames - lag_f), step):
-            fa = raw_loader_fn(idx)
-            fb = raw_loader_fn(idx + lag_f)
-            if fa is None or fb is None:
-                continue
-            fa_f = fa.astype(np.float32)
-            fb_f = fb.astype(np.float32)
-            if np.std(fa_f - fb_f) < 0.4:
-                continue
-            A = preprocess_fn(fa_f)
-            B = preprocess_fn(fb_f)
-            h, w = A.shape
-            for dy in range(-max_lag, max_lag + 1):
-                for dx in range(-max_lag, max_lag + 1):
-                    y1 = max(0, -dy)
-                    y2 = min(h, h - dy)
-                    x1 = max(0, -dx)
-                    x2 = min(w, w - dx)
-                    subA = A[y1:y2, x1:x2]
-                    subB = B[y1+dy:y2+dy, x1+dx:x2+dx]
-                    subA_z = subA - np.mean(subA)
-                    subB_z = subB - np.mean(subB)
-                    samples_bs[(dy, dx)].append(float(np.mean(subA_z * subB_z)))
+        def collect_samples(min_diff_std):
+            samples_bs = {(dy, dx): [] for dy in range(-max_lag, max_lag + 1) for dx in range(-max_lag, max_lag + 1)}
+            pair_count = 0
+            for idx in range(0, max(1, total_frames - lag_f), step):
+                fa = raw_loader_fn(idx)
+                fb = raw_loader_fn(idx + lag_f)
+                if fa is None or fb is None:
+                    continue
+                fa_f = fa.astype(np.float32)
+                fb_f = fb.astype(np.float32)
+                if np.std(fa_f - fb_f) < min_diff_std:
+                    continue
+                A = preprocess_fn(fa_f)
+                B = preprocess_fn(fb_f)
+                h, w = A.shape
+                for dy in range(-max_lag, max_lag + 1):
+                    for dx in range(-max_lag, max_lag + 1):
+                        y1 = max(0, -dy)
+                        y2 = min(h, h - dy)
+                        x1 = max(0, -dx)
+                        x2 = min(w, w - dx)
+                        subA = A[y1:y2, x1:x2]
+                        subB = B[y1+dy:y2+dy, x1+dx:x2+dx]
+                        subA_z = subA - np.mean(subA)
+                        subB_z = subB - np.mean(subB)
+                        samples_bs[(dy, dx)].append(float(np.mean(subA_z * subB_z)))
+                pair_count += 1
+            return samples_bs, pair_count
+
+        samples_bs, pair_count = collect_samples(min_diff_std=1.0)
+        if pair_count < 10:
+            samples_bs, pair_count = collect_samples(min_diff_std=0.35)
 
         B_S = np.zeros((2 * max_lag + 1, 2 * max_lag + 1), dtype=np.float32)
         for dy in range(-max_lag, max_lag + 1):

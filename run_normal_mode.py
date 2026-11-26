@@ -137,6 +137,91 @@ def get_smart_output_dir(raw_path, base_out=None, tag=None):
     out_dir = os.path.join(SCRIPT_DIR, "normal_mode_output", subpath, folder_name)
     return os.path.abspath(out_dir)
 
+def fit_kasa_circle(xs, ys):
+    """Kasa 最小平方法正圓擬合，回傳 (xc, yc, r_fit, radial_rmse_px, aspect_ratio_xy)"""
+    if len(xs) < 10 or (np.ptp(xs) < 1.0 and np.ptp(ys) < 1.0):
+        return 0.0, 0.0, 0.0, 0.0, 1.0
+    A_mat = np.column_stack([xs, ys, np.ones_like(xs)])
+    b_vec = xs**2 + ys**2
+    sol, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
+    xc = float(sol[0] / 2.0)
+    yc = float(sol[1] / 2.0)
+    r_fit = float(np.sqrt(max(0.0, sol[2] + xc**2 + yc**2)))
+    radii = np.hypot(xs - xc, ys - yc)
+    radial_rmse = float(np.sqrt(np.mean((radii - r_fit)**2)))
+    aspect = float(np.ptp(xs) / (np.ptp(ys) + 1e-6))
+    return xc, yc, r_fit, radial_rmse, aspect
+
+def compute_circle_and_global_rmse(xs, ys, raw_path):
+    """
+    計算圓度誤差與全域軌跡誤差均方根 (Global Trajectory RMSE)：
+      1. 優先尋找對應的 step2/experiments `*_ground_truth.csv`，計算嚴格逐幀全域軌跡誤差均方根。
+      2. 次之尋找同目錄或 `../Trace/` 的 P3950 參考 CSV，依運動弧長線性重採樣並做 2D Procrustes 對齊後計算 RMSE。
+      3. 若無外部真值 CSV，則以 Kasa 最佳擬合正圓計算軌跡均方根誤差 (Ideal_Circle_Fit)。
+    """
+    xc, yc, r_fit, radial_rmse, aspect = fit_kasa_circle(xs, ys)
+    N = len(xs)
+    seq_name = os.path.splitext(os.path.basename(raw_path))[0]
+    raw_dir = os.path.dirname(os.path.abspath(raw_path))
+    parent_name = os.path.basename(raw_dir)
+    if parent_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
+        parent_name = os.path.basename(os.path.dirname(raw_dir))
+
+    # 1. 尋找完整 GTH CSV
+    gth_candidates = [
+        os.path.join(SCRIPT_DIR, "experiments", parent_name, seq_name, f"{seq_name}_ground_truth.csv"),
+        os.path.join(SCRIPT_DIR, "step2_output", f"{seq_name}_ground_truth.csv"),
+    ]
+    for gp in gth_candidates:
+        if os.path.exists(gp):
+            try:
+                gth_data = np.genfromtxt(gp, delimiter=',', names=True)
+                if len(gth_data) == N and 'x_px' in gth_data.dtype.names and 'y_px' in gth_data.dtype.names:
+                    gx, gy = gth_data['x_px'], gth_data['y_px']
+                    rmse = float(np.sqrt(np.mean((xs - gx)**2 + (ys - gy)**2)))
+                    return xc, yc, r_fit, radial_rmse, aspect, rmse, f"GTH ({os.path.basename(gp)})"
+            except Exception:
+                pass
+
+    # 2. 尋找原相 P3950 參考 CSV (同目錄、../Trace/ 或 ../CSV/)
+    p3950_candidates = [
+        os.path.join(raw_dir, f"{seq_name}.csv"),
+        os.path.join(os.path.dirname(raw_dir), "Trace", f"{seq_name}.csv"),
+        os.path.join(os.path.dirname(raw_dir), "CSV", f"{seq_name}.csv"),
+    ]
+    for cp in p3950_candidates:
+        if os.path.exists(cp):
+            try:
+                arr = np.loadtxt(cp, delimiter=',')
+                if arr.ndim == 2 and arr.shape[1] >= 2 and len(arr) >= 50:
+                    px_raw = np.cumsum(arr[:, 0])
+                    py_raw = np.cumsum(arr[:, 1])
+                    # 依累積弧長重採樣活躍區段以對齊時序差
+                    t_arc_p = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(px_raw), np.diff(py_raw)))])
+                    t_arc_p /= (t_arc_p[-1] + 1e-9)
+                    t_arc_x = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))])
+                    t_arc_x /= (t_arc_x[-1] + 1e-9)
+                    px_resamp = np.interp(t_arc_x, t_arc_p, px_raw)
+                    py_resamp = np.interp(t_arc_x, t_arc_p, py_raw)
+
+                    # 2D 相似變換對齊 (尺度 + 旋轉 + 平移，不含鏡射)
+                    P = np.column_stack([px_resamp - np.mean(px_resamp), py_resamp - np.mean(py_resamp)])
+                    Q = np.column_stack([xs - np.mean(xs), ys - np.mean(ys)])
+                    U, _, Vt = np.linalg.svd(P.T @ Q)
+                    R = U @ Vt
+                    if np.linalg.det(R) < 0:
+                        Vt[-1, :] *= -1
+                        R = U @ Vt
+                    scale = float(np.sum((P @ R) * Q) / (np.sum(P**2) + 1e-9))
+                    Q_ref = scale * (P @ R) + np.array([np.mean(xs), np.mean(ys)])
+                    rmse = float(np.sqrt(np.mean(np.sum((np.column_stack([xs, ys]) - Q_ref)**2, axis=1))))
+                    return xc, yc, r_fit, radial_rmse, aspect, rmse, f"P3950_Aligned ({os.path.basename(cp)})"
+            except Exception:
+                pass
+
+    # 3. 退回：相對於 Kasa 最佳理想正圓之軌跡均方根誤差
+    return xc, yc, r_fit, radial_rmse, aspect, radial_rmse, "Ideal_Circle_Fit"
+
 def main():
     parser = argparse.ArgumentParser(description="ToG Tracker 純 Normal Mode 自主追蹤工具 (支援第三階段 IC 極致輕量化無影像 FPN 架構)")
     parser.add_argument("raw", help="RAW 檔案名稱或完整路徑 (例如: POS1-1.raw)")
@@ -148,8 +233,8 @@ def main():
     parser.add_argument("--radius", "-r", type=int, default=None, help="搜尋半徑 (預設: 36x36 為 1, >=64x64 為 2)")
     parser.add_argument("--plot", action="store_true", default=True, help="是否生成 2D 軌跡折線圖 (預設開啟)")
     parser.add_argument("--filter", default="bandpass3x7", 
-                        choices=["bandpass3x7", "bandpass3x7_r0", "bandpass5x7", "bandpass7", "bandpass5", "bandpass5_sep", "bandpass9", "none"],
-                        help="單級前處理濾波器 (預設: bandpass3x7 扁長方形核，IC 僅需 2 條 Line Buffer!)")
+                        choices=["bandpass3x7", "bandpass3x7_r0", "bandpass5x7", "bandpass7", "bandpass5", "bandpass5_sep", "optnavi_ctrl", "none"],
+                        help="單級前處理濾波器 (預設: bandpass3x7 扁長方形核，IC 僅需 2 條 Line Buffer；optnavi_ctrl 為 OptNavi box2+saddle3+corner 對照組)")
     parser.add_argument("--bandpass", action="store_true", default=True, help="啟用帶通濾波器前處理 (相容舊參數)")
     parser.add_argument("--no-bandpass", dest="bandpass", action="store_false", help="關閉帶通濾波器")
     args = parser.parse_args()
@@ -165,13 +250,14 @@ def main():
     if not args.bandpass:
         filter_type = 'none'
 
-    # 滑鼠墊採用單級 3x3 Corner (共用 2 條 Line Buffer，不串聯前端帶通，避免多級 Line Buffer 浪費！)
-    use_corner_filter = is_mousepad
+    # 滑鼠墊預設採用單級 3x3 Corner (共用 2 條 Line Buffer，不串聯前端帶通，避免多級 Line Buffer 浪費！)
+    # 若明確指定 optnavi_ctrl (box2+saddle3+corner 對照組)，則交由 apply_bandpass_filter 內部完整執行，不重複疊加
+    use_corner_filter = is_mousepad and (filter_type != 'optnavi_ctrl')
     if is_mousepad and args.filter == "bandpass3x7":
         filter_type = 'none'
 
     fpn_mode = 'full' if args.fpn else args.fpn_mode.lower()
-    if is_mousepad and fpn_mode == 'csbc':
+    if is_mousepad and fpn_mode == 'csbc' and filter_type != 'optnavi_ctrl':
         # 布質滑鼠墊紋理極強，單級 3x3 Corner 在 0-Byte 無 FPN 下即達 1.60 px 閉環誤差
         fpn_mode = 'none'
 
@@ -196,7 +282,7 @@ def main():
         'bandpass7':      {'win_rows': 7, 'line_buffers': 6, 'macs_per_pix': 49, 'sram_savings_pct': 0.0,  'mac_savings_pct': 0.0,  'desc': '7x7 同心零均值帶通核 (原廠基準 6條LineBuf, 總和=0.0)'},
         'bandpass5':      {'win_rows': 5, 'line_buffers': 4, 'macs_per_pix': 25, 'sram_savings_pct': 33.3, 'mac_savings_pct': 49.0, 'desc': '5x5 同心零均值帶通核 (4條LineBuf, 總和=0.0)'},
         'bandpass5_sep':  {'win_rows': 5, 'line_buffers': 4, 'macs_per_pix': 10, 'sram_savings_pct': 33.3, 'mac_savings_pct': 79.6, 'desc': '5x5 可分離 1D+1D 卷積 (4條LineBuf, 極簡低功耗)'},
-        'bandpass9':      {'win_rows': 9, 'line_buffers': 8, 'macs_per_pix': 81, 'sram_savings_pct': -33.3,'mac_savings_pct': -65.3,'desc': '舊版 9x9 擴展帶通核 (8條LineBuf)'},
+        'optnavi_ctrl':   {'win_rows': 6, 'line_buffers': 5, 'macs_per_pix': 28, 'sram_savings_pct': 16.7, 'mac_savings_pct': 42.9, 'desc': 'OptNavi 對照組: box2 + saddle3 + 4-Corner (雙級串聯需 5 條LineBuf)'},
         'none':           {'win_rows': (3 if use_corner_filter else 1), 'line_buffers': (2 if use_corner_filter else 0), 'macs_per_pix': (12 if use_corner_filter else 0), 'sram_savings_pct': (66.7 if use_corner_filter else 100.0), 'mac_savings_pct': (75.5 if use_corner_filter else 100.0), 'desc': ('單級 3x3 4-Corner 抗鋸齒核 (共用2條LineBuf, 免串聯)' if use_corner_filter else '無濾波器')}
     }[filter_type]
 
@@ -316,12 +402,11 @@ def main():
     ys = records[:, 4]
     squals = records[:, 5]
 
-    # 指標統計
+    # 指標統計 (含全域軌跡誤差均方根與圓度指標)
     speeds = np.sqrt(dxs**2 + dys**2)
     moving_mask = speeds > 0.01
     closure_error_px = float(np.sqrt((xs[-1] - xs[0])**2 + (ys[-1] - ys[0])**2))
-    xc, yc = float(np.mean(xs)), float(np.mean(ys))
-    r_est = float(np.mean(np.sqrt((xs - xc)**2 + (ys - yc)**2)))
+    xc, yc, r_est, radial_rmse_px, aspect_ratio_xy, global_traj_rmse_px, rmse_ref_type = compute_circle_and_global_rmse(xs, ys, raw_path)
 
     # 4. 儲存標準 CSV 輸出 (含 Metadata Header 與 Feature Generation 完整配置，使用 utf-8-sig 防止 Excel 亂碼)
     csv_path = os.path.join(out_dir, "Track_B_NormalMode.csv")
@@ -340,12 +425,12 @@ def main():
         f.write(f"# FEATURE_GENERATION_PIPELINE:\n")
         f.write(f"#   1. FPN_Suppression_Mode: {fpn_mode.upper()} ({fpn_desc_map[fpn_mode]})\n")
         f.write(f"#   2. Single_Stage_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
-        f.write(f"#   3. Corner_Filter: {'Enabled (單級 3x3 4-Corner 0/45/90/135 deg, 免串聯)' if use_corner_filter else 'Disabled (單級直出無串聯)'}\n")
+        f.write(f"#   3. Corner_Filter: {'Enabled (OptNavi 4-Corner 0/45/90/135 deg)' if (use_corner_filter or filter_type == 'optnavi_ctrl') else 'Disabled (單級直出無串聯)'}\n")
         f.write(f"#   4. SQUAL_&_Textureless_Gate: {'CSBC 純淨微塵能量檢測 + 無紋理慣性滑行 (Coasting)' if fpn_mode == 'csbc' else f'3x3 Laplacian Variance (閾值={tracker.squal_th})'}\n")
         f.write(f"#   5. Correlation_Surface: {'CSBC 去靜態偏置協方差曲面' if fpn_mode == 'csbc' else 'ZNCC 面積補償相關曲面'} (搜尋半徑={search_radius})\n")
-        f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (解析度: 1/32 px)\n")
+        f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (+ 安全1D退避, 1/32 px)\n")
         f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (視窗高={hw_specs['win_rows']}列, 節省 {hw_specs['sram_savings_pct']:.1f}%), FPN_Memory={fpn_mem_bytes} Bytes (節省 {fpn_mem_saving_pct:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel\n")
-        f.write(f"# TRACKING_METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, mean_squal={np.mean(squals):.1f}\n")
+        f.write(f"# TRACKING_METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, radial_rmse={radial_rmse_px:.2f}px, global_traj_rmse={global_traj_rmse_px:.2f}px ({rmse_ref_type}), aspect_xy={aspect_ratio_xy:.3f}, mean_squal={np.mean(squals):.1f}\n")
         f.write("frame,dx,dy,x,y,squal\n")
         for i in range(len(records)):
             f.write(f"{int(frames_idx[i])},{dxs[i]:.4f},{dys[i]:.4f},{xs[i]:.4f},{ys[i]:.4f},{squals[i]:.2f}\n")
@@ -382,7 +467,7 @@ def main():
             "macs_per_pixel": hw_specs['macs_per_pix'],
             "line_buffer_savings_pct": hw_specs['sram_savings_pct'],
             "mac_savings_pct": hw_specs['mac_savings_pct'],
-            "use_corner_filter": use_corner_filter,
+            "use_corner_filter": bool(use_corner_filter or filter_type == 'optnavi_ctrl'),
             "search_radius": search_radius,
             "subpixel_method": "analytical_2d_paraboloid",
             "subpixel_scale": 32,
@@ -396,6 +481,10 @@ def main():
             "active_moving_ratio": float(np.mean(moving_mask)),
             "closure_error_px": round(closure_error_px, 2),
             "estimated_circle_radius_px": round(r_est, 2),
+            "radial_rmse_px": round(radial_rmse_px, 2),
+            "global_traj_rmse_px": round(global_traj_rmse_px, 2),
+            "rmse_ref_type": rmse_ref_type,
+            "aspect_ratio_xy": round(aspect_ratio_xy, 3),
             "circle_center_px": [round(xc, 2), round(yc, 2)],
             "final_position_px": [round(float(xs[-1]), 2), round(float(ys[-1]), 2)],
             "mean_speed_px_per_frame": round(float(np.mean(speeds[moving_mask])) if np.any(moving_mask) else 0.0, 3),
@@ -407,14 +496,17 @@ def main():
         json.dump(meta_data, f, indent=2, ensure_ascii=False)
     print(f"[完成] 已成功記錄結構化元數據日誌: {meta_path}")
 
-    # 6. 繪製並儲存軌跡圖 (若啟用)
+    # 6. 繪製並儲存軌跡圖 (含最佳擬合理想正圓參考虛線)
     if args.plot and len(xs) > 1:
         plot_path = os.path.join(out_dir, "Track_B_NormalMode_plot.png")
         plt.figure(figsize=(8, 8))
-        plt.plot(xs, ys, color='#2563eb', linewidth=1.5, label=f'Normal Mode ({filter_type}, fpn={fpn_mode})')
+        if r_est > 1.0:
+            th = np.linspace(0, 2 * np.pi, 360)
+            plt.plot(xc + r_est * np.cos(th), yc + r_est * np.sin(th), color='#94a3b8', linestyle='--', linewidth=1.2, label=f'Fitted Circle (R={r_est:.1f}px)')
+        plt.plot(xs, ys, color='#2563eb', linewidth=1.6, label=f'Normal Mode ({filter_type}, fpn={fpn_mode})')
         plt.scatter(xs[0], ys[0], color='#10b981', s=80, marker='o', edgecolors='black', label='Start (0, 0)', zorder=5)
         plt.scatter(xs[-1], ys[-1], color='#ef4444', s=80, marker='s', edgecolors='black', label=f'End ({xs[-1]:.1f}, {ys[-1]:.1f})', zorder=5)
-        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B) | E_close={closure_error_px:.2f}px | R={r_est:.1f}px", fontsize=10.5, fontweight='bold')
+        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B)\nE_close={closure_error_px:.2f}px | Global_RMSE={global_traj_rmse_px:.2f}px | RadRMSE={radial_rmse_px:.2f}px | X/Y={aspect_ratio_xy:.3f}", fontsize=10, fontweight='bold')
         plt.xlabel("Accumulated X (pixels)", fontsize=11)
         plt.ylabel("Accumulated Y (pixels)", fontsize=11)
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -429,17 +521,19 @@ def main():
     print("\n" + "=" * 75)
     print("  Normal Mode 追蹤成果統計")
     print("=" * 75)
-    print(f"  總處理幀數      : {len(xs)} 幀")
-    print(f"  運動活躍幀數    : {np.sum(moving_mask)} 幀 ({np.mean(moving_mask)*100:.1f}%)")
-    print(f"  回原點閉環誤差  : {closure_error_px:.2f} px")
-    print(f"  擬合圓半徑      : {r_est:.2f} px (中心: [{xc:.1f}, {yc:.1f}])")
-    print(f"  最終累積位移 (X): {xs[-1]:+.2f} px")
-    print(f"  最終累積位移 (Y): {ys[-1]:+.2f} px")
-    print(f"  X 座標極值範圍  : [{np.min(xs):.2f}, {np.max(xs):.2f}] px (跨距: {np.ptp(xs):.2f} px)")
-    print(f"  Y 座標極值範圍  : [{np.min(ys):.2f}, {np.max(ys):.2f}] px (跨距: {np.ptp(ys):.2f} px)")
-    print(f"  平均單幀運動速度: {np.mean(speeds[moving_mask]) if np.any(moving_mask) else 0.0:.3f} px/frame")
-    print(f"  最大單幀運動速度: {np.max(speeds):.3f} px/frame")
-    print(f"  平均特徵品質SQUAL: {np.mean(squals):.1f}")
+    print(f"  總處理幀數        : {len(xs)} 幀")
+    print(f"  運動活躍幀數      : {np.sum(moving_mask)} 幀 ({np.mean(moving_mask)*100:.1f}%)")
+    print(f"  回原點閉環誤差    : {closure_error_px:.2f} px")
+    print(f"  全域軌跡誤差均方根: {global_traj_rmse_px:.2f} px (基準: {rmse_ref_type})")
+    print(f"  圓度誤差均方根    : {radial_rmse_px:.2f} px (長寬比 X/Y={aspect_ratio_xy:.3f})")
+    print(f"  擬合圓半徑        : {r_est:.2f} px (中心: [{xc:.1f}, {yc:.1f}])")
+    print(f"  最終累積位移 (X)  : {xs[-1]:+.2f} px")
+    print(f"  最終累積位移 (Y)  : {ys[-1]:+.2f} px")
+    print(f"  X 座標極值範圍    : [{np.min(xs):.2f}, {np.max(xs):.2f}] px (跨距: {np.ptp(xs):.2f} px)")
+    print(f"  Y 座標極值範圍    : [{np.min(ys):.2f}, {np.max(ys):.2f}] px (跨距: {np.ptp(ys):.2f} px)")
+    print(f"  平均單幀運動速度  : {np.mean(speeds[moving_mask]) if np.any(moving_mask) else 0.0:.3f} px/frame")
+    print(f"  最大單幀運動速度  : {np.max(speeds):.3f} px/frame")
+    print(f"  平均特徵品質 SQUAL: {np.mean(squals):.1f}")
     print("=" * 75 + "\n")
 
 if __name__ == '__main__':

@@ -1,0 +1,57 @@
+{
+  "source_raw": "C:\\Data\\testPattern玻璃\\Circle_R0.1inch_IPS0.005_Glass\\POS1-1.raw",
+  "filter_type": "bandpass3x7",
+  "zero_level_uint8": 128,
+  "files": {
+    "01_original.raw": {
+      "description": "原始 RAW 影像",
+      "width": 36,
+      "height": 36,
+      "num_frames": 200,
+      "scale_gain_to_uint8": 1.0,
+      "float_min": 17.0,
+      "float_max": 252.0,
+      "float_std": 59.871
+    },
+    "02_after_fpn.raw": {
+      "description": "扣除 FPN 模型後的純淨微塵 RAW",
+      "width": 36,
+      "height": 36,
+      "num_frames": 200,
+      "scale_gain_to_uint8": 7.0297,
+      "float_min": -87.0,
+      "float_max": 6.0,
+      "float_std": 3.793
+    },
+    "03_after_fpn_and_bp.raw": {
+      "description": "扣除 FPN + bandpass3x7 帶通特徵 RAW",
+      "width": 30,
+      "height": 34,
+      "num_frames": 200,
+      "scale_gain_to_uint8": 4.2188,
+      "float_min": -138.208,
+      "float_max": 27.639,
+      "float_std": 6.321
+    },
+    "04_nofpn_bp_for_csbc.raw": {
+      "description": "無 FPN 直接過 bandpass3x7 (CSBC 實際輸入特徵圖)",
+      "width": 30,
+      "height": 34,
+      "num_frames": 200,
+      "scale_gain_to_uint8": 3.641,
+      "float_min": -134.917,
+      "float_max": 33.861,
+      "float_std": 7.324
+    },
+    "05_after_optnavi_box2_sad3_corner.raw": {
+      "description": "對照組 OptNavi (box2 + saddle3 + 4-Corner) 特徵圖 RAW",
+      "width": 31,
+      "height": 31,
+      "num_frames": 200,
+      "scale_gain_to_uint8": 4.6415,
+      "float_min": -71.5,
+      "float_max": 68.375,
+      "float_std": 5.745
+    }
+  }
+}

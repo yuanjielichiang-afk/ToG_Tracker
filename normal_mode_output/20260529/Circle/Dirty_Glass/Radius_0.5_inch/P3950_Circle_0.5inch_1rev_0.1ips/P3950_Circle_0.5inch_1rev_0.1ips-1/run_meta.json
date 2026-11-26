@@ -6,7 +6,7 @@
     "modified_time": "2026-05-29T10:21:44"
   },
   "execution_info": {
-    "timestamp": "2026-11-26T10:12:32.108644",
+    "timestamp": "2026-11-26T17:02:54.398562",
     "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\20260529\\Circle\\Dirty_Glass\\Radius_0.5_inch\\P3950_Circle_0.5inch_1rev_0.1ips\\P3950_Circle_0.5inch_1rev_0.1ips-1",
     "command_args": [
       "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Dirty Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_0.1ips\\Image\\P3950_Circle_0.5inch_1rev_0.1ips-1.raw"
@@ -39,20 +39,24 @@
   },
   "tracking_metrics": {
     "total_frames_processed": 13629,
-    "active_moving_frames": 12777,
-    "active_moving_ratio": 0.9374862425709883,
-    "closure_error_px": 2.54,
-    "estimated_circle_radius_px": 414.28,
+    "active_moving_frames": 12807,
+    "active_moving_ratio": 0.9396874312128549,
+    "closure_error_px": 3.31,
+    "estimated_circle_radius_px": 415.59,
+    "radial_rmse_px": 8.1,
+    "global_traj_rmse_px": 11.0,
+    "rmse_ref_type": "P3950_Aligned (P3950_Circle_0.5inch_1rev_0.1ips-1.csv)",
+    "aspect_ratio_xy": 1.061,
     "circle_center_px": [
-      -296.89,
-      -263.03
+      -299.19,
+      -284.75
     ],
     "final_position_px": [
-      1.28,
-      -2.19
+      3.31,
+      -0.06
     ],
     "mean_speed_px_per_frame": 0.208,
-    "max_speed_px_per_frame": 0.532,
-    "mean_squal": 3758.9
+    "max_speed_px_per_frame": 0.562,
+    "mean_squal": 3744.2
   }
 }

@@ -6,7 +6,7 @@
     "modified_time": "2025-12-02T17:31:20"
   },
   "execution_info": {
-    "timestamp": "2026-11-26T10:12:27.941550",
+    "timestamp": "2026-11-26T17:02:49.911943",
     "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\Circle_R0.2inch_IPS0.02_Glass\\POS1-1",
     "command_args": [
       "C:\\Data\\testPattern玻璃\\Circle_R0.2inch_IPS0.02_Glass\\RAW\\POS1-1.raw"
@@ -39,20 +39,24 @@
   },
   "tracking_metrics": {
     "total_frames_processed": 5373,
-    "active_moving_frames": 5330,
-    "active_moving_ratio": 0.991997022147776,
-    "closure_error_px": 5.63,
-    "estimated_circle_radius_px": 166.39,
+    "active_moving_frames": 5315,
+    "active_moving_ratio": 0.9892052856876977,
+    "closure_error_px": 8.52,
+    "estimated_circle_radius_px": 167.24,
+    "radial_rmse_px": 1.44,
+    "global_traj_rmse_px": 22.92,
+    "rmse_ref_type": "GTH (POS1-1_ground_truth.csv)",
+    "aspect_ratio_xy": 1.02,
     "circle_center_px": [
-      155.95,
-      3.33
+      166.64,
+      3.46
     ],
     "final_position_px": [
-      -3.47,
-      4.44
+      -1.19,
+      8.44
     ],
     "mean_speed_px_per_frame": 0.221,
-    "max_speed_px_per_frame": 1.539,
-    "mean_squal": 371.6
+    "max_speed_px_per_frame": 1.498,
+    "mean_squal": 376.0
   }
 }

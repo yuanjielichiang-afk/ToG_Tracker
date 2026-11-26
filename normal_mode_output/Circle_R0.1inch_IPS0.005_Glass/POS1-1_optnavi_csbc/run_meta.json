@@ -1,0 +1,68 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\Circle_R0.1inch_IPS0.005_Glass\\POS1-1.raw",
+    "filename": "POS1-1.raw",
+    "size_bytes": 13748200,
+    "modified_time": "2025-12-05T13:46:46"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-26T17:02:31.227799",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\Circle_R0.1inch_IPS0.005_Glass\\POS1-1_optnavi_csbc",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\Circle_R0.1inch_IPS0.005_Glass\\POS1-1.raw",
+      "--filter",
+      "optnavi_ctrl",
+      "--fpn-mode",
+      "csbc",
+      "--tag",
+      "optnavi_csbc"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 76,
+    "total_frames": 10543
+  },
+  "hardware_and_algorithm_config": {
+    "fpn_mode": "csbc",
+    "fpn_memory_bytes": 82,
+    "fpn_memory_savings_pct": 93.7,
+    "filter_type": "optnavi_ctrl",
+    "window_rows": 6,
+    "line_buffer_lines": 5,
+    "macs_per_pixel": 28,
+    "line_buffer_savings_pct": 16.7,
+    "mac_savings_pct": 42.9,
+    "use_corner_filter": true,
+    "search_radius": 1,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 10543,
+    "active_moving_frames": 9785,
+    "active_moving_ratio": 0.9281039552309589,
+    "closure_error_px": 6.42,
+    "estimated_circle_radius_px": 88.83,
+    "radial_rmse_px": 2.44,
+    "global_traj_rmse_px": 14.84,
+    "rmse_ref_type": "GTH (POS1-1_ground_truth.csv)",
+    "aspect_ratio_xy": 1.044,
+    "circle_center_px": [
+      91.42,
+      5.7
+    ],
+    "final_position_px": [
+      2.97,
+      5.69
+    ],
+    "mean_speed_px_per_frame": 0.155,
+    "max_speed_px_per_frame": 2.299,
+    "mean_squal": 415.7
+  }
+}

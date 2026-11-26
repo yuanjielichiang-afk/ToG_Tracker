@@ -37,7 +37,7 @@ def evaluate_three_modes(raw_path, gth_csv_path, fpn_path, out_dir, use_bandpass
         print("[OptNavi] 啟用 4-Corner 角度紋理對齊濾波器 (打破滑鼠墊經緯編織 repeat pattern)")
         use_bandpass = False
     elif use_bandpass:
-        print("[OptNavi] 啟用 9x9 同心帶通濾波器前處理 (強化微塵特徵、濾除低頻漸變光暈)")
+        print("[OptNavi] 啟用同心帶通濾波器前處理 (強化微塵特徵、濾除低頻漸變光暈)")
         
     # 動態自適應搜尋半徑：對於高解析度或高速序列 (如 FAMS 64x64 或 4 ips)，使用 search_radius=2 (5x5 窗口)
     search_radius = 2 if (raw_hdr.get('width', 36) >= 64 or '4ips' in raw_path.lower()) else 1
