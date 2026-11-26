@@ -38,9 +38,10 @@ class NormalModeTracker:
                  keyframe_dist=2.5, squal_th=5.0, v_alpha=0.25,
                  fpn_model=None, max_ref_dist=6.0,
                  use_corner_filter=False, corner_flat_bias=2.0,
-                 use_bandpass_filter=False, bandpass_type='bandpass5',
+                 use_bandpass_filter=False, bandpass_type='bandpass3x7',
                  subpixel_method='parabolic_2d',
-                 max_phys_v=None):
+                 max_phys_v=None,
+                 static_bias_table=None):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
         self.keyframe_dist = keyframe_dist
@@ -51,9 +52,16 @@ class NormalModeTracker:
         self.use_corner_filter = use_corner_filter
         self.corner_flat_bias = corner_flat_bias
         self.use_bandpass_filter = use_bandpass_filter
-        self.bandpass_type = bandpass_type.lower() if bandpass_type else 'bandpass5'
+        self.bandpass_type = bandpass_type.lower() if bandpass_type else 'bandpass3x7'
         self.subpixel_method = subpixel_method
         self.max_phys_v = max_phys_v if max_phys_v is not None else max(0.5, self.r * 1.0)
+        self.static_bias_table = static_bias_table
+        if static_bias_table is not None:
+            self.csbc_max_lag = (static_bias_table.shape[0] - 1) // 2
+            self.csbc_bs00 = max(1e-4, float(static_bias_table[self.csbc_max_lag, self.csbc_max_lag]))
+        else:
+            self.csbc_max_lag = 0
+            self.csbc_bs00 = 0.0
 
         # 核心卷積核
         self.laplacian_kernel = np.array([
@@ -62,7 +70,34 @@ class NormalModeTracker:
             [ 0.0, -1.0,  0.0]
         ], dtype=np.float32)
 
-        # 1. OptNavi.cpp 原廠 7x7 同心零均值帶通卷積核 (需要 7 條 Line Buffer, 49 次 MAC, 總和嚴格為 0.0)
+        # 0a. 第三階段 IC 極致輕量化主力：3x7 扁長方形零均值帶通核 (僅需 2 條 Line Buffer! 21 MAC / 對稱摺疊僅 6 乘法)
+        # 中心補償至 116 達成嚴格零均值 (sum = 0.0)，消除二次拋物面 Lens Shading 空間變異，且垂直僅 3 列不引進上下光斑截止懸崖假影
+        self.k_bandpass3x7 = np.array([
+            [-1, -11, -15,   7, -15, -11, -1],
+            [-1, -17,   7, 116,   7, -17, -1],
+            [-1, -11, -15,   7, -15, -11, -1]
+        ], dtype=np.float32)
+        self.k_bandpass3x7_norm = self.k_bandpass3x7 / (np.sum(np.abs(self.k_bandpass3x7)) + 1e-6) * 4.0
+
+        # 0b. 3x7 逐列零和雙消失矩帶通核 (每一列水平總和嚴格為 0，100% 物理消滅水平 Row FPN 與二次拋物面光暈，僅需 2 條 Line Buffer)
+        self.k_bandpass3x7_r0 = np.array([
+            [ 4,  -4,  -8,  16,  -8,  -4,  4],
+            [ 6, -20,   0,  28,   0, -20,  6],
+            [ 4,  -4,  -8,  16,  -8,  -4,  4]
+        ], dtype=np.float32)
+        self.k_bandpass3x7_r0_norm = self.k_bandpass3x7_r0 / (np.sum(np.abs(self.k_bandpass3x7_r0)) + 1e-6) * 4.0
+
+        # 0c. 5x7 扁長方形零均值帶通核 (需 4 條 Line Buffer, 35 MAC, 中心補償至 206 使總和為 0.0)
+        self.k_bandpass5x7 = np.array([
+            [ 2,  -5, -11, -17, -11,  -5,   2],
+            [-1, -11, -15,   7, -15, -11,  -1],
+            [-1, -17,   7, 206,   7, -17,  -1],
+            [-1, -11, -15,   7, -15, -11,  -1],
+            [ 2,  -5, -11, -17, -11,  -5,   2]
+        ], dtype=np.float32)
+        self.k_bandpass5x7_norm = self.k_bandpass5x7 / (np.sum(np.abs(self.k_bandpass5x7)) + 1e-6) * 4.0
+
+        # 1. OptNavi.cpp 原廠 7x7 同心零均值帶通卷積核 (需要 6~7 條 Line Buffer, 49 次 MAC, 總和嚴格為 0.0)
         # 由 10 個同心圓半徑係數 d = [184, 7, -15, -17, -11, -5, -1, -1, 2, 5] 嚴格按距離平方 r^2 分佈
         self.k_bandpass7 = np.array([
             [ 5,   2,  -1,  -1,  -1,   2,   5],
@@ -141,12 +176,21 @@ class NormalModeTracker:
         """
         帶通濾波器前處理：凸顯微米微塵顆粒邊緣並濾除低頻光暈漸變。
         支援：
-          - 'bandpass7'     : 7x7 同心零均值核 (原廠基準，7 條 Line Buffer, 49 MAC, 總和 0.0)
-          - 'bandpass5'     : 5x5 同心零均值核 (化簡推薦！5 條 Line Buffer, 25 MAC, 總和 0.0)
-          - 'bandpass5_sep' : 5x5 可分離 1D 水平+1D 垂直卷積 (5 條 Line Buffer, 10 MAC, 節省 80%~88% 算力)
-          - 'bandpass9'     : 舊版 9x9 帶通核 (9 條 Line Buffer, 81 MAC)
+          - 'bandpass3x7'    : 3x7 扁長方形零均值核 (IC 首選！僅需 2 條 Line Buffer, 21 MAC / 對稱僅 6 乘法, valid 內縮無邊界假影)
+          - 'bandpass3x7_r0' : 3x7 逐列零和雙消失矩核 (僅需 2 條 Line Buffer, 100% 消滅水平 Row FPN 與二次光暈)
+          - 'bandpass5x7'    : 5x7 扁長方形零均值核 (需 4 條 Line Buffer, 35 MAC)
+          - 'bandpass7'      : 7x7 同心零均值核 (原廠基準，需 6 條 Line Buffer, 49 MAC)
+          - 'bandpass5'      : 5x5 同心零均值核 (需 4 條 Line Buffer, 25 MAC)
+          - 'bandpass5_sep'  : 5x5 可分離 1D 水平+1D 垂直卷積 (需 4 條 Line Buffer, 10 MAC)
+          - 'bandpass9'      : 舊版 9x9 帶通核 (需 8 條 Line Buffer, 81 MAC)
         """
-        if self.bandpass_type == 'bandpass7':
+        if self.bandpass_type == 'bandpass3x7':
+            return convolve2d(frame, self.k_bandpass3x7_norm, mode='valid')
+        elif self.bandpass_type == 'bandpass3x7_r0':
+            return convolve2d(frame, self.k_bandpass3x7_r0_norm, mode='valid')
+        elif self.bandpass_type == 'bandpass5x7':
+            return convolve2d(frame, self.k_bandpass5x7_norm, mode='valid')
+        elif self.bandpass_type == 'bandpass7':
             return convolve2d(frame, self.k_bandpass7_norm, mode='same', boundary='symm')
         elif self.bandpass_type == 'bandpass5':
             return convolve2d(frame, self.k_bandpass5_norm, mode='same', boundary='symm')
@@ -161,7 +205,10 @@ class NormalModeTracker:
             return frame
 
     def preprocess_frame(self, raw_frame):
-        """影像前處理標準管線：FPN 減除 -> 9x9 帶通增強 (可選) -> 4-Corner 紋理對齊 (可選)"""
+        """
+        影像前處理標準管線：
+          - 若啟用單級 Corner 模式且關閉帶通 (滑鼠墊極簡模式)，僅需 2 條 Line Buffer 直接抽取 4-Corner 特徵，免串聯！
+        """
         cur_frame = self.remove_fpn(raw_frame)
         if self.use_bandpass_filter:
             cur_frame = self.apply_bandpass_filter(cur_frame)
@@ -208,12 +255,42 @@ class NormalModeTracker:
         py = int(round(pred_dy_rel))
         return px, py, pred_dx_rel, pred_dy_rel
 
+    def eval_csbc_cov(self, ref_f, cur_f, ux, uy):
+        """
+        互相關域靜態偏置扣除法 (Correlation-Domain Static Bias Cancellation, CSBC)：
+        不需儲存 36x36 像素級 FPN 影像 (0 Bytes 影像級 FPN！)，
+        直接在重疊區協方差中減去微小中心對稱純量偏置表 B_S(uy, ux) (僅 41 個 16-bit 純量 = 82 Bytes)，
+        精確消除感測器高頻固定像素散斑 / PRNU 在零位移處的自相關吸附尖峰。
+        """
+        h, w = ref_f.shape
+        y1 = max(0, -uy)
+        y2 = min(h, h - uy)
+        x1 = max(0, -ux)
+        x2 = min(w, w - ux)
+        if y2 - y1 < 8 or x2 - x1 < 8:
+            return -1e6
+        subR = ref_f[y1:y2, x1:x2]
+        subC = cur_f[y1+uy:y2+uy, x1+ux:x2+ux]
+        subR_z = subR - np.mean(subR)
+        subC_z = subC - np.mean(subC)
+        cov = float(np.mean(subR_z * subC_z))
+        L = self.csbc_max_lag
+        if self.static_bias_table is not None and abs(ux) <= L and abs(uy) <= L:
+            cov -= float(self.static_bias_table[uy + L, ux + L])
+        return cov
+
     def compute_correlation_surface(self, cur, ref, px, py):
-        """步驟 4: 局部受限搜尋與重疊區域正規化互相關 (Area-Compensated ZNCC)"""
-        h, w = cur.shape
+        """步驟 4: 局部受限搜尋與重疊區域互相關 (支援 CSBC 無影像 FPN 扣除模式 或 標準 ZNCC)"""
         r = self.r
         surface = np.zeros((2*r + 1, 2*r + 1), dtype=np.float32)
 
+        if self.static_bias_table is not None:
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    surface[dy + r, dx + r] = self.eval_csbc_cov(ref, cur, px + dx, py + dy)
+            return surface
+
+        h, w = cur.shape
         margin = r + 2
         ry_s, rx_s = margin, margin
         roi_h, roi_w = h - 2*margin, w - 2*margin
@@ -333,6 +410,53 @@ class NormalModeTracker:
         self.v_x = (1.0 - alpha) * self.v_x + alpha * clamped_dx
         self.v_y = (1.0 - alpha) * self.v_y + alpha * clamped_dy
 
+    @staticmethod
+    def calibrate_csbc_table(raw_loader_fn, total_frames, preprocess_fn, max_lag=4):
+        """
+        線上/跨幀自校準微小靜態自相關偏置表 B_S(dy, dx) (完全不儲存任何 36x36 像素級 FPN 影像！)
+        利用位移後微塵互不相關、而感測器靜態圖案恆定的物理性質：
+          E[ F_t(x,y) * F_{t+lag}(x+dx, y+dy) ] == B_S(dy, dx)
+        對稱摺疊後僅需 41 個 16-bit 純量 (82 Bytes)，比 1,296 Bytes 整張 FPN 節省 93.7% 面積！
+        """
+        lag_f = max(40, total_frames // 30)
+        if total_frames <= lag_f + 5:
+            lag_f = max(1, total_frames // 3)
+        step = max(1, (total_frames - lag_f) // 80)
+        samples_bs = {(dy, dx): [] for dy in range(-max_lag, max_lag + 1) for dx in range(-max_lag, max_lag + 1)}
+
+        for idx in range(0, max(1, total_frames - lag_f), step):
+            fa = raw_loader_fn(idx)
+            fb = raw_loader_fn(idx + lag_f)
+            if fa is None or fb is None:
+                continue
+            fa_f = fa.astype(np.float32)
+            fb_f = fb.astype(np.float32)
+            if np.std(fa_f - fb_f) < 0.4:
+                continue
+            A = preprocess_fn(fa_f)
+            B = preprocess_fn(fb_f)
+            h, w = A.shape
+            for dy in range(-max_lag, max_lag + 1):
+                for dx in range(-max_lag, max_lag + 1):
+                    y1 = max(0, -dy)
+                    y2 = min(h, h - dy)
+                    x1 = max(0, -dx)
+                    x2 = min(w, w - dx)
+                    subA = A[y1:y2, x1:x2]
+                    subB = B[y1+dy:y2+dy, x1+dx:x2+dx]
+                    subA_z = subA - np.mean(subA)
+                    subB_z = subB - np.mean(subB)
+                    samples_bs[(dy, dx)].append(float(np.mean(subA_z * subB_z)))
+
+        B_S = np.zeros((2 * max_lag + 1, 2 * max_lag + 1), dtype=np.float32)
+        for dy in range(-max_lag, max_lag + 1):
+            for dx in range(-max_lag, max_lag + 1):
+                vals = samples_bs[(dy, dx)]
+                B_S[dy + max_lag, dx + max_lag] = float(np.median(vals)) if vals else 0.0
+        # 強制滿足自相關數學中心對稱性 B_S(-dy, -dx) == B_S(dy, dx)，硬體儲存量再減半！
+        B_S = 0.5 * (B_S + B_S[::-1, ::-1])
+        return B_S
+
     def step(self, raw_frame, frame_idx):
         """自主模式單幀處理主流程"""
         cur_frame = self.preprocess_frame(raw_frame)
@@ -359,38 +483,86 @@ class NormalModeTracker:
         pred_gx = (self.global_x - self.last_dx_rel) + pred_dx_rel
         pred_gy = (self.global_y - self.last_dy_rel) + pred_dy_rel
 
-        # 3x3 相關匹配
+        # 相關匹配
         surface = self.compute_correlation_surface(cur_frame, self.ref_frame, px, py)
 
         r = self.r
         v_idx, u_idx = np.unravel_index(np.argmax(surface), surface.shape)
         best_score = float(surface[v_idx, u_idx])
 
-        dx_int = px + (u_idx - r)
-        dy_int = py + (v_idx - r)
+        if self.static_bias_table is not None:
+            # CSBC 無影像 FPN 模式：純淨微塵能量檢測與無紋理玻璃慣性滑行 (Coasting)
+            bs00 = self.csbc_bs00
+            cur_clean_var = float(np.var(cur_frame)) - bs00
+            squal = max(0.0, cur_clean_var * 25.0)
 
-        dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
+            if best_score < 0.05 * bs00 or cur_clean_var < 0.03 * bs00:
+                frame_dx = self.v_x
+                frame_dy = self.v_y
+                dx_q = self.last_dx_rel + frame_dx
+                dy_q = self.last_dy_rel + frame_dy
+            else:
+                dx_int = px + (u_idx - r)
+                dy_int = py + (v_idx - r)
+                if 0 < u_idx < 2*r and 0 < v_idx < 2*r:
+                    dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
+                else:
+                    # 峰值落於搜尋邊界時，以 (dx_int, dy_int) 為中心重取 3x3 局部曲面做無偏 2D 拋物面內插
+                    surf_re = np.zeros((3, 3), dtype=np.float32)
+                    for dy2 in range(-1, 2):
+                        for dx2 in range(-1, 2):
+                            surf_re[dy2 + 1, dx2 + 1] = self.eval_csbc_cov(
+                                self.ref_frame, cur_frame, dx_int + dx2, dy_int + dy2
+                            )
+                    dx_sub, dy_sub = self.parabolic_2d(surf_re)
 
-        dx_tot = dx_int + dx_sub
-        dy_tot = dy_int + dy_sub
+                dx_tot = dx_int + dx_sub
+                dy_tot = dy_int + dy_sub
+                dx_q = round(dx_tot * self.subpixel_scale) / self.subpixel_scale
+                dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
+                frame_dx = dx_q - self.last_dx_rel
+                frame_dy = dy_q - self.last_dy_rel
 
-        dx_q = round(dx_tot * self.subpixel_scale) / self.subpixel_scale
-        dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
+            self.update_velocity_filter(frame_dx, frame_dy)
+            self.global_x += frame_dx
+            self.global_y += frame_dy
+            self.last_dx_rel = dx_q
+            self.last_dy_rel = dy_q
 
-        frame_dx = dx_q - self.last_dx_rel
-        frame_dy = dy_q - self.last_dy_rel
+            dist_from_ref = math.hypot(self.last_dx_rel, self.last_dy_rel)
+            kf_d = min(self.keyframe_dist, 2.0)
+            max_d = min(self.max_ref_dist, max(2.5, float(self.csbc_max_lag) - 0.5))
+            if (dist_from_ref >= kf_d and cur_clean_var >= 0.08 * bs00) or (dist_from_ref >= max_d):
+                self.ref_frame = cur_frame
+                self.ref_idx = frame_idx
+                self.last_dx_rel = 0.0
+                self.last_dy_rel = 0.0
+        else:
+            dx_int = px + (u_idx - r)
+            dy_int = py + (v_idx - r)
 
-        # 更新速度濾波器 (防污染保護)
-        self.update_velocity_filter(frame_dx, frame_dy)
+            dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
 
-        # 更新全局累積位置
-        self.global_x += frame_dx
-        self.global_y += frame_dy
-        self.last_dx_rel = dx_q
-        self.last_dy_rel = dy_q
+            dx_tot = dx_int + dx_sub
+            dy_tot = dy_int + dy_sub
 
-        # 更新 Keyframe
-        self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
+            dx_q = round(dx_tot * self.subpixel_scale) / self.subpixel_scale
+            dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
+
+            frame_dx = dx_q - self.last_dx_rel
+            frame_dy = dy_q - self.last_dy_rel
+
+            # 更新速度濾波器 (防污染保護)
+            self.update_velocity_filter(frame_dx, frame_dy)
+
+            # 更新全局累積位置
+            self.global_x += frame_dx
+            self.global_y += frame_dy
+            self.last_dx_rel = dx_q
+            self.last_dy_rel = dy_q
+
+            # 更新 Keyframe
+            self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
 
         return {
             'frame': frame_idx,

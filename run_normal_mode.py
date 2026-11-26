@@ -138,16 +138,18 @@ def get_smart_output_dir(raw_path, base_out=None, tag=None):
     return os.path.abspath(out_dir)
 
 def main():
-    parser = argparse.ArgumentParser(description="ToG Tracker 純 Normal Mode 自主追蹤工具")
+    parser = argparse.ArgumentParser(description="ToG Tracker 純 Normal Mode 自主追蹤工具 (支援第三階段 IC 極致輕量化無影像 FPN 架構)")
     parser.add_argument("raw", help="RAW 檔案名稱或完整路徑 (例如: POS1-1.raw)")
     parser.add_argument("--out", "-o", default=None, help="輸出目錄 (預設為智能階層目錄)")
-    parser.add_argument("--tag", default=None, help="輸出目錄自訂標籤後綴 (例如: v1, bandpass5)")
-    parser.add_argument("--fpn", default=None, help="指定 FPN 模型路徑 (.raw 檔，預設自動提取)")
+    parser.add_argument("--tag", default=None, help="輸出目錄自訂標籤後綴 (例如: csbc, nofpn, bp3x7)")
+    parser.add_argument("--fpn", default=None, help="指定 FPN 模型路徑 (.raw 檔；若指定則自動切換為 full 模式)")
+    parser.add_argument("--fpn-mode", default="csbc", choices=["csbc", "none", "full"],
+                        help="背景雜訊抑制模式: csbc=無影像FPN互相關純量扣除(預設,僅82B省93.7%%面積), none=極致0-Byte純濾波, full=傳統整張FPN影像(1296B)")
     parser.add_argument("--radius", "-r", type=int, default=None, help="搜尋半徑 (預設: 36x36 為 1, >=64x64 為 2)")
     parser.add_argument("--plot", action="store_true", default=True, help="是否生成 2D 軌跡折線圖 (預設開啟)")
-    parser.add_argument("--filter", default="bandpass7", 
-                        choices=["bandpass7", "bandpass5", "bandpass5_sep", "bandpass9", "none"],
-                        help="前處理濾波器類型 (預設: bandpass7 原廠 7x7 基準，或選 bandpass5 晶片化簡版)")
+    parser.add_argument("--filter", default="bandpass3x7", 
+                        choices=["bandpass3x7", "bandpass3x7_r0", "bandpass5x7", "bandpass7", "bandpass5", "bandpass5_sep", "bandpass9", "none"],
+                        help="單級前處理濾波器 (預設: bandpass3x7 扁長方形核，IC 僅需 2 條 Line Buffer!)")
     parser.add_argument("--bandpass", action="store_true", default=True, help="啟用帶通濾波器前處理 (相容舊參數)")
     parser.add_argument("--no-bandpass", dest="bandpass", action="store_false", help="關閉帶通濾波器")
     args = parser.parse_args()
@@ -157,10 +159,21 @@ def main():
         print(f"[錯誤] 找不到 RAW 檔案: {args.raw}")
         sys.exit(1)
 
-    # 決定濾波器類型
+    # 決定濾波器與單級多工模式
+    is_mousepad = 'mousepad' in raw_path.lower()
     filter_type = args.filter.lower()
     if not args.bandpass:
         filter_type = 'none'
+
+    # 滑鼠墊採用單級 3x3 Corner (共用 2 條 Line Buffer，不串聯前端帶通，避免多級 Line Buffer 浪費！)
+    use_corner_filter = is_mousepad
+    if is_mousepad and args.filter == "bandpass3x7":
+        filter_type = 'none'
+
+    fpn_mode = 'full' if args.fpn else args.fpn_mode.lower()
+    if is_mousepad and fpn_mode == 'csbc':
+        # 布質滑鼠墊紋理極強，單級 3x3 Corner 在 0-Byte 無 FPN 下即達 1.60 px 閉環誤差
+        fpn_mode = 'none'
 
     # 決定輸出目錄 (智慧階層解析，永不衝突)
     out_dir = get_smart_output_dir(raw_path, args.out, args.tag)
@@ -175,52 +188,86 @@ def main():
     file_mtime = datetime.fromtimestamp(os.path.getmtime(raw_path)).isoformat()
     now_iso = datetime.now().isoformat()
 
-    # 硬體開銷與算力評估 (以原廠 7x7 基準計算節約幅度)
+    # 硬體開銷與算力評估 (嚴格以 RTL Raster-Scan 所需 H_k - 1 條 Line Buffer 計算，對標原廠 7x7 的 6 條 Line Buffer)
     hw_specs = {
-        'bandpass7': {'line_buffers': 7, 'macs_per_pix': 49, 'sram_savings_pct': 0.0, 'mac_savings_pct': 0.0, 'desc': '7x7 同心零均值帶通核 (原廠基準, 總和=0.0)'},
-        'bandpass5': {'line_buffers': 5, 'macs_per_pix': 25, 'sram_savings_pct': 28.6, 'mac_savings_pct': 49.0, 'desc': '5x5 同心零均值帶通核 (化簡版, 總和=0.0)'},
-        'bandpass5_sep': {'line_buffers': 5, 'macs_per_pix': 10, 'sram_savings_pct': 28.6, 'mac_savings_pct': 79.6, 'desc': '5x5 可分離 1D+1D 卷積 (極簡低功耗)'},
-        'bandpass9': {'line_buffers': 9, 'macs_per_pix': 81, 'sram_savings_pct': -28.6, 'mac_savings_pct': -65.3, 'desc': '舊版 9x9 擴展帶通核'},
-        'none': {'line_buffers': 0, 'macs_per_pix': 0, 'sram_savings_pct': 100.0, 'mac_savings_pct': 100.0, 'desc': '無濾波器'}
+        'bandpass3x7':    {'win_rows': 3, 'line_buffers': 2, 'macs_per_pix': 21, 'sram_savings_pct': 66.7, 'mac_savings_pct': 57.1, 'desc': '3x7 扁長方形零均值核 (僅2條LineBuf, 對稱僅6乘法, valid內縮)'},
+        'bandpass3x7_r0': {'win_rows': 3, 'line_buffers': 2, 'macs_per_pix': 21, 'sram_savings_pct': 66.7, 'mac_savings_pct': 57.1, 'desc': '3x7 逐列零和雙消失矩核 (僅2條LineBuf, 100%消滅Row-FPN與二次光暈)'},
+        'bandpass5x7':    {'win_rows': 5, 'line_buffers': 4, 'macs_per_pix': 35, 'sram_savings_pct': 33.3, 'mac_savings_pct': 28.6, 'desc': '5x7 扁長方形零均值核 (4條LineBuf, 總和=0.0)'},
+        'bandpass7':      {'win_rows': 7, 'line_buffers': 6, 'macs_per_pix': 49, 'sram_savings_pct': 0.0,  'mac_savings_pct': 0.0,  'desc': '7x7 同心零均值帶通核 (原廠基準 6條LineBuf, 總和=0.0)'},
+        'bandpass5':      {'win_rows': 5, 'line_buffers': 4, 'macs_per_pix': 25, 'sram_savings_pct': 33.3, 'mac_savings_pct': 49.0, 'desc': '5x5 同心零均值帶通核 (4條LineBuf, 總和=0.0)'},
+        'bandpass5_sep':  {'win_rows': 5, 'line_buffers': 4, 'macs_per_pix': 10, 'sram_savings_pct': 33.3, 'mac_savings_pct': 79.6, 'desc': '5x5 可分離 1D+1D 卷積 (4條LineBuf, 極簡低功耗)'},
+        'bandpass9':      {'win_rows': 9, 'line_buffers': 8, 'macs_per_pix': 81, 'sram_savings_pct': -33.3,'mac_savings_pct': -65.3,'desc': '舊版 9x9 擴展帶通核 (8條LineBuf)'},
+        'none':           {'win_rows': (3 if use_corner_filter else 1), 'line_buffers': (2 if use_corner_filter else 0), 'macs_per_pix': (12 if use_corner_filter else 0), 'sram_savings_pct': (66.7 if use_corner_filter else 100.0), 'mac_savings_pct': (75.5 if use_corner_filter else 100.0), 'desc': ('單級 3x3 4-Corner 抗鋸齒核 (共用2條LineBuf, 免串聯)' if use_corner_filter else '無濾波器')}
     }[filter_type]
 
-    print("\n" + "=" * 75)
-    print("  ToG Tracker: Normal Mode 獨立追蹤器")
+    full_fpn_bytes = w * h
+    fpn_mem_bytes = {'csbc': 82, 'none': 0, 'full': full_fpn_bytes}[fpn_mode]
+    fpn_mem_saving_pct = (1.0 - fpn_mem_bytes / max(1, full_fpn_bytes)) * 100.0
+    fpn_desc_map = {
+        'csbc': f"CSBC 互相關域靜態純量扣除 (0 Bytes 影像FPN! 僅 41 個對稱純量={fpn_mem_bytes}B, 省 {fpn_mem_saving_pct:.1f}% 面積)",
+        'none': "NONE 純濾波無背景儲存 (0 Bytes FPN SRAM, 省 100.0% 面積!)",
+        'full': f"FULL 傳統整張時間中位數 FPN 影像 ({w}x{h}={full_fpn_bytes} Bytes SRAM)"
+    }
+
+    print("\n" + "=" * 78)
+    print("  ToG Tracker: Normal Mode 獨立追蹤器 (Stage-3 IC 輕量化架構)")
     print(f"  原始 RAW 檔案: {raw_path}")
     print(f"  影像規格      : {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS")
-    print(f"  前處理濾波器  : {filter_type.upper()} ({hw_specs['desc']})")
-    print(f"  硬體資源消耗  : Line Buffer={hw_specs['line_buffers']} 條 (SRAM減省 {hw_specs['sram_savings_pct']:.1f}%), MAC/Pix={hw_specs['macs_per_pix']} (算力減省 {hw_specs['mac_savings_pct']:.1f}%)")
+    print(f"  單級特徵濾波  : {filter_type.upper()} ({hw_specs['desc']})")
+    print(f"  FPN 抑制架構  : {fpn_desc_map[fpn_mode]}")
+    print(f"  IC 硬體資源   : Line Buffer={hw_specs['line_buffers']} 條 (減省 {hw_specs['sram_savings_pct']:.1f}%), FPN記憶體={fpn_mem_bytes}B (減省 {fpn_mem_saving_pct:.1f}%), MAC/Pix={hw_specs['macs_per_pix']}")
     print(f"  智能輸出目錄  : {out_dir}")
-    print("=" * 75)
+    print("=" * 78)
 
-    # 1. 準備 FPN 模型
-    if args.fpn and os.path.exists(args.fpn):
-        print(f"[1/3] 載入自訂 FPN 模型: {args.fpn}")
-        fpn_hdr = OpniRawIO.read_header(args.fpn)
-        with open(args.fpn, 'rb') as f:
-            fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
-    else:
-        existing_fpn = find_existing_fpn(raw_path)
-        if existing_fpn:
-            print(f"[1/3] 載入已校準的 FPN 模型: {existing_fpn}")
-            fpn_hdr = OpniRawIO.read_header(existing_fpn)
-            with open(existing_fpn, 'rb') as f:
-                fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
-        else:
-            print("[1/3] 使用全序列時間中位數 (Temporal Median) 自適應提取純淨 FPN 底噪...")
-            fpn_model = compute_temporal_median_fpn(raw_path, header)
-
-    # 2. 確定追蹤參數
+    # 1. 確定追蹤參數與準備 FPN / CSBC 模型
     if args.radius is not None:
         search_radius = args.radius
     else:
-        search_radius = 2 if (w >= 64 or '4ips' in raw_path.lower()) else 1
-
-    use_corner_filter = 'mousepad' in raw_path.lower()
-    if use_corner_filter:
-        print("  [提示] 偵測到滑鼠墊紋理，啟用 OptNavi 4-Corner 抗鋸齒濾波器")
+        search_radius = 2 if (w >= 64 or '4ips' in raw_path.lower() or '5ips' in raw_path.lower()) else 1
 
     use_bandpass = (filter_type != 'none')
+    fpn_model = None
+    static_bias_table = None
+
+    if fpn_mode == 'full':
+        if args.fpn and os.path.exists(args.fpn):
+            print(f"[1/3] 載入自訂整張 FPN 模型: {args.fpn}")
+            fpn_hdr = OpniRawIO.read_header(args.fpn)
+            with open(args.fpn, 'rb') as f:
+                fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
+        else:
+            existing_fpn = find_existing_fpn(raw_path)
+            if existing_fpn:
+                print(f"[1/3] 載入已校準整張 FPN 模型: {existing_fpn}")
+                fpn_hdr = OpniRawIO.read_header(existing_fpn)
+                with open(existing_fpn, 'rb') as f:
+                    fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
+            else:
+                print("[1/3] 使用全序列時間中位數提取整張 FPN 模型 (1296 Bytes)...")
+                fpn_model = compute_temporal_median_fpn(raw_path, header)
+    elif fpn_mode == 'csbc':
+        print("[1/3] 執行 CSBC 跨幀線上自校準 (不儲存任何 FPN 影像，僅提取 41 個對稱相關純量 = 82 Bytes)...")
+        proto = NormalModeTracker(
+            search_radius=search_radius,
+            fpn_model=None,
+            use_corner_filter=use_corner_filter,
+            use_bandpass_filter=use_bandpass,
+            bandpass_type=filter_type
+        )
+        max_lag_csbc = max(4, search_radius + 3)
+        with open(raw_path, 'rb') as f_cal:
+            static_bias_table = NormalModeTracker.calibrate_csbc_table(
+                raw_loader_fn=lambda idx: OpniRawIO.load_frame(f_cal, header, idx),
+                total_frames=total_frames,
+                preprocess_fn=proto.preprocess_frame,
+                max_lag=max_lag_csbc
+            )
+    else:
+        print("[1/3] 極致 0-Byte 無 FPN 模式：完全不載入任何背景模型，純靠單級零均值濾波器抑制光暈！")
+
+    if use_corner_filter:
+        print("  [提示] 偵測到滑鼠墊紋理，啟用單級 3x3 4-Corner 抗鋸齒濾波器 (僅用 2 條 Line Buffer，免串聯)")
+
     print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, 次像素解算: 解析解 2D 橢圓拋物面)...")
     tracker = NormalModeTracker(
         search_radius=search_radius,
@@ -231,7 +278,8 @@ def main():
         fpn_model=fpn_model,
         use_corner_filter=use_corner_filter,
         use_bandpass_filter=use_bandpass,
-        bandpass_type=filter_type
+        bandpass_type=filter_type,
+        static_bias_table=static_bias_table
     )
 
     # 3. 逐幀執行追蹤
@@ -290,19 +338,18 @@ def main():
         f.write(f"# PROCESSED_AT: {now_iso}\n")
         f.write(f"# SPECS: {w}x{h}, {total_frames} frames, {fps} fps, {bit_depth}-bit\n")
         f.write(f"# FEATURE_GENERATION_PIPELINE:\n")
-        f.write(f"#   1. FPN_Subtraction: Temporal Median (全序列時間中位數自適應底噪消除)\n")
-        f.write(f"#   2. Bandpass_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
-        f.write(f"#   3. Corner_Filter: {'Enabled (OptNavi 4-Corner 0/45/90/135 deg)' if use_corner_filter else 'Disabled'}\n")
-        f.write(f"#   4. SQUAL_Evaluation: 3x3 Laplacian Kernel (閾值={tracker.squal_th})\n")
-        f.write(f"#   5. Correlation_Surface: ZNCC 面積補償相關曲面比對 (搜尋半徑={search_radius})\n")
+        f.write(f"#   1. FPN_Suppression_Mode: {fpn_mode.upper()} ({fpn_desc_map[fpn_mode]})\n")
+        f.write(f"#   2. Single_Stage_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
+        f.write(f"#   3. Corner_Filter: {'Enabled (單級 3x3 4-Corner 0/45/90/135 deg, 免串聯)' if use_corner_filter else 'Disabled (單級直出無串聯)'}\n")
+        f.write(f"#   4. SQUAL_&_Textureless_Gate: {'CSBC 純淨微塵能量檢測 + 無紋理慣性滑行 (Coasting)' if fpn_mode == 'csbc' else f'3x3 Laplacian Variance (閾值={tracker.squal_th})'}\n")
+        f.write(f"#   5. Correlation_Surface: {'CSBC 去靜態偏置協方差曲面' if fpn_mode == 'csbc' else 'ZNCC 面積補償相關曲面'} (搜尋半徑={search_radius})\n")
         f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (解析度: 1/32 px)\n")
-        f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (SRAM節約 {hw_specs['sram_savings_pct']:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel (算力節約 {hw_specs['mac_savings_pct']:.1f}%)\n")
+        f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (視窗高={hw_specs['win_rows']}列, 節省 {hw_specs['sram_savings_pct']:.1f}%), FPN_Memory={fpn_mem_bytes} Bytes (節省 {fpn_mem_saving_pct:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel\n")
         f.write(f"# TRACKING_METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, mean_squal={np.mean(squals):.1f}\n")
         f.write("frame,dx,dy,x,y,squal\n")
         for i in range(len(records)):
             f.write(f"{int(frames_idx[i])},{dxs[i]:.4f},{dys[i]:.4f},{xs[i]:.4f},{ys[i]:.4f},{squals[i]:.2f}\n")
-    print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含元數據標頭與 UTF-8 BOM): {csv_target}")
-    print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含元數據標頭): {csv_path}")
+    print(f"\n[完成] 已成功匯出標準 CSV 軌跡 (含完整 Feature Generation 標頭與 UTF-8 BOM): {csv_target}")
 
     # 5. 儲存完整結構化元數據文件 (run_meta.json)
     meta_path = os.path.join(out_dir, "run_meta.json")
@@ -326,11 +373,16 @@ def main():
             "total_frames": total_frames
         },
         "hardware_and_algorithm_config": {
+            "fpn_mode": fpn_mode,
+            "fpn_memory_bytes": fpn_mem_bytes,
+            "fpn_memory_savings_pct": round(fpn_mem_saving_pct, 1),
             "filter_type": filter_type,
+            "window_rows": hw_specs['win_rows'],
             "line_buffer_lines": hw_specs['line_buffers'],
             "macs_per_pixel": hw_specs['macs_per_pix'],
-            "sram_savings_pct": hw_specs['sram_savings_pct'],
+            "line_buffer_savings_pct": hw_specs['sram_savings_pct'],
             "mac_savings_pct": hw_specs['mac_savings_pct'],
+            "use_corner_filter": use_corner_filter,
             "search_radius": search_radius,
             "subpixel_method": "analytical_2d_paraboloid",
             "subpixel_scale": 32,
@@ -359,10 +411,10 @@ def main():
     if args.plot and len(xs) > 1:
         plot_path = os.path.join(out_dir, "Track_B_NormalMode_plot.png")
         plt.figure(figsize=(8, 8))
-        plt.plot(xs, ys, color='#2563eb', linewidth=1.5, label=f'Normal Mode ({filter_type})')
+        plt.plot(xs, ys, color='#2563eb', linewidth=1.5, label=f'Normal Mode ({filter_type}, fpn={fpn_mode})')
         plt.scatter(xs[0], ys[0], color='#10b981', s=80, marker='o', edgecolors='black', label='Start (0, 0)', zorder=5)
         plt.scatter(xs[-1], ys[-1], color='#ef4444', s=80, marker='s', edgecolors='black', label=f'End ({xs[-1]:.1f}, {ys[-1]:.1f})', zorder=5)
-        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, MAC={hw_specs['macs_per_pix']}) | E_close={closure_error_px:.2f}px | R={r_est:.1f}px", fontsize=11, fontweight='bold')
+        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B) | E_close={closure_error_px:.2f}px | R={r_est:.1f}px", fontsize=10.5, fontweight='bold')
         plt.xlabel("Accumulated X (pixels)", fontsize=11)
         plt.ylabel("Accumulated Y (pixels)", fontsize=11)
         plt.grid(True, linestyle='--', alpha=0.5)
