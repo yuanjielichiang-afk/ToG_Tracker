@@ -145,9 +145,9 @@ def main():
     parser.add_argument("--fpn", default=None, help="指定 FPN 模型路徑 (.raw 檔，預設自動提取)")
     parser.add_argument("--radius", "-r", type=int, default=None, help="搜尋半徑 (預設: 36x36 為 1, >=64x64 為 2)")
     parser.add_argument("--plot", action="store_true", default=True, help="是否生成 2D 軌跡折線圖 (預設開啟)")
-    parser.add_argument("--filter", default="bandpass5", 
-                        choices=["bandpass5", "bandpass5_sep", "bandpass9", "none"],
-                        help="前處理濾波器類型 (預設: bandpass5, 僅需 5 條 Line Buffer, 25 MAC)")
+    parser.add_argument("--filter", default="bandpass7", 
+                        choices=["bandpass7", "bandpass5", "bandpass5_sep", "bandpass9", "none"],
+                        help="前處理濾波器類型 (預設: bandpass7 原廠 7x7 基準，或選 bandpass5 晶片化簡版)")
     parser.add_argument("--bandpass", action="store_true", default=True, help="啟用帶通濾波器前處理 (相容舊參數)")
     parser.add_argument("--no-bandpass", dest="bandpass", action="store_false", help="關閉帶通濾波器")
     args = parser.parse_args()
@@ -175,11 +175,12 @@ def main():
     file_mtime = datetime.fromtimestamp(os.path.getmtime(raw_path)).isoformat()
     now_iso = datetime.now().isoformat()
 
-    # 硬體開銷與算力評估
+    # 硬體開銷與算力評估 (以原廠 7x7 基準計算節約幅度)
     hw_specs = {
-        'bandpass5': {'line_buffers': 5, 'macs_per_pix': 25, 'sram_savings_pct': 44.4, 'mac_savings_pct': 69.1, 'desc': '5x5 同心核 (零均值帶通)'},
-        'bandpass5_sep': {'line_buffers': 5, 'macs_per_pix': 10, 'sram_savings_pct': 44.4, 'mac_savings_pct': 87.7, 'desc': '5x5 可分離 1D+1D 卷積 (極簡低功耗)'},
-        'bandpass9': {'line_buffers': 9, 'macs_per_pix': 81, 'sram_savings_pct': 0.0, 'mac_savings_pct': 0.0, 'desc': '9x9 同心帶通核 (基準)'},
+        'bandpass7': {'line_buffers': 7, 'macs_per_pix': 49, 'sram_savings_pct': 0.0, 'mac_savings_pct': 0.0, 'desc': '7x7 同心零均值帶通核 (原廠基準, 總和=0.0)'},
+        'bandpass5': {'line_buffers': 5, 'macs_per_pix': 25, 'sram_savings_pct': 28.6, 'mac_savings_pct': 49.0, 'desc': '5x5 同心零均值帶通核 (化簡版, 總和=0.0)'},
+        'bandpass5_sep': {'line_buffers': 5, 'macs_per_pix': 10, 'sram_savings_pct': 28.6, 'mac_savings_pct': 79.6, 'desc': '5x5 可分離 1D+1D 卷積 (極簡低功耗)'},
+        'bandpass9': {'line_buffers': 9, 'macs_per_pix': 81, 'sram_savings_pct': -28.6, 'mac_savings_pct': -65.3, 'desc': '舊版 9x9 擴展帶通核'},
         'none': {'line_buffers': 0, 'macs_per_pix': 0, 'sram_savings_pct': 100.0, 'mac_savings_pct': 100.0, 'desc': '無濾波器'}
     }[filter_type]
 

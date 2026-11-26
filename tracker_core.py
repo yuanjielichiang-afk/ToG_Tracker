@@ -62,7 +62,37 @@ class NormalModeTracker:
             [ 0.0, -1.0,  0.0]
         ], dtype=np.float32)
 
-        # 1. OptNavi.cpp 9x9 同心帶通卷積核 (需要 9 條 Line Buffer, 81 次 MAC)
+        # 1. OptNavi.cpp 原廠 7x7 同心零均值帶通卷積核 (需要 7 條 Line Buffer, 49 次 MAC, 總和嚴格為 0.0)
+        # 由 10 個同心圓半徑係數 d = [184, 7, -15, -17, -11, -5, -1, -1, 2, 5] 嚴格按距離平方 r^2 分佈
+        self.k_bandpass7 = np.array([
+            [ 5,   2,  -1,  -1,  -1,   2,   5],
+            [ 2,  -5, -11, -17, -11,  -5,   2],
+            [-1, -11, -15,   7, -15, -11,  -1],
+            [-1, -17,   7, 184,   7, -17,  -1],
+            [-1, -11, -15,   7, -15, -11,  -1],
+            [ 2,  -5, -11, -17, -11,  -5,   2],
+            [ 5,   2,  -1,  -1,  -1,   2,   5]
+        ], dtype=np.float32)
+        self.k_bandpass7_norm = self.k_bandpass7 / (np.sum(np.abs(self.k_bandpass7)) + 1e-6) * 4.0
+
+        # 2. 5x5 同心零均值帶通卷積核 (僅需 5 條 Line Buffer，SRAM 減省 28.6%~44.4%，25 次 MAC 減省 49%~69%)
+        # 中心補償至 208 使總和恰好為 0 (零直流偏置，徹底消除低頻不均勻光暈)
+        self.k_bandpass5 = np.array([
+            [-5, -11, -17, -11, -5],
+            [-11, -15,   7, -15, -11],
+            [-17,   7, 208,   7, -17],
+            [-11, -15,   7, -15, -11],
+            [-5, -11, -17, -11, -5]
+        ], dtype=np.float32)
+        self.k_bandpass5_norm = self.k_bandpass5 / (np.sum(np.abs(self.k_bandpass5)) + 1e-6) * 4.0
+
+        # 3. 5x5 可分離 1D 卷積分解 (SVD Rank-1 逼近，運算量降至 5+5=10 MAC，節省 80%~88% 算力)
+        v_sep = np.array([1.160315, -0.524294, -14.422272, -0.524294, 1.160315], dtype=np.float32)
+        sep_2d = np.outer(v_sep, v_sep)
+        scale = math.sqrt(4.0 / (np.sum(np.abs(sep_2d)) + 1e-6))
+        self.k_bandpass5_1d = v_sep * scale
+
+        # 4. 舊版相容 9x9 同心帶通卷積核 (需要 9 條 Line Buffer, 81 次 MAC)
         d = [184, 7, -15, -17, -11, -5, -1, -1, 2, 5]
         self.k_bandpass9 = np.array([
             [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]],
@@ -76,23 +106,6 @@ class NormalModeTracker:
             [d[4], d[3], d[2], d[1], d[0], d[1], d[2], d[3], d[4]]
         ], dtype=np.float32)
         self.k_bandpass9_norm = self.k_bandpass9 / (np.sum(np.abs(self.k_bandpass9)) + 1e-6) * 4.0
-
-        # 2. 5x5 同心帶通卷積核 (僅需 5 條 Line Buffer，SRAM 減省 44.4%，25 次 MAC 減省 69.1%)
-        # 中心補償至 208 使總和恰好為 0 (零直流偏置，徹底消除低頻不均勻光暈)
-        self.k_bandpass5 = np.array([
-            [-5, -11, -17, -11, -5],
-            [-11, -15,   7, -15, -11],
-            [-17,   7, 208,   7, -17],
-            [-11, -15,   7, -15, -11],
-            [-5, -11, -17, -11, -5]
-        ], dtype=np.float32)
-        self.k_bandpass5_norm = self.k_bandpass5 / (np.sum(np.abs(self.k_bandpass5)) + 1e-6) * 4.0
-
-        # 3. 5x5 可分離 1D 卷積分解 (SVD Rank-1 逼近，運算量降至 5+5=10 MAC，節省 87.7% 算力)
-        v_sep = np.array([1.160315, -0.524294, -14.422272, -0.524294, 1.160315], dtype=np.float32)
-        sep_2d = np.outer(v_sep, v_sep)
-        scale = math.sqrt(4.0 / (np.sum(np.abs(sep_2d)) + 1e-6))
-        self.k_bandpass5_1d = v_sep * scale
 
         # OptNavi.cpp 4-Corner 紋理對齊卷積核 (打破滑鼠墊經緯編織 repeat pattern)
         self.k_cor000 = np.array([
@@ -128,11 +141,14 @@ class NormalModeTracker:
         """
         帶通濾波器前處理：凸顯微米微塵顆粒邊緣並濾除低頻光暈漸變。
         支援：
-          - 'bandpass5'     : 5x5 同心核 (推薦！5 條 Line Buffer, 25 MAC, SRAM 節省 44%)
-          - 'bandpass5_sep' : 5x5 可分離 1D 水平+1D 垂直卷積 (5 條 Line Buffer, 10 MAC, 節省 88% 算力)
-          - 'bandpass9'     : 9x9 同心核 (9 條 Line Buffer, 81 MAC)
+          - 'bandpass7'     : 7x7 同心零均值核 (原廠基準，7 條 Line Buffer, 49 MAC, 總和 0.0)
+          - 'bandpass5'     : 5x5 同心零均值核 (化簡推薦！5 條 Line Buffer, 25 MAC, 總和 0.0)
+          - 'bandpass5_sep' : 5x5 可分離 1D 水平+1D 垂直卷積 (5 條 Line Buffer, 10 MAC, 節省 80%~88% 算力)
+          - 'bandpass9'     : 舊版 9x9 帶通核 (9 條 Line Buffer, 81 MAC)
         """
-        if self.bandpass_type == 'bandpass5':
+        if self.bandpass_type == 'bandpass7':
+            return convolve2d(frame, self.k_bandpass7_norm, mode='same', boundary='symm')
+        elif self.bandpass_type == 'bandpass5':
             return convolve2d(frame, self.k_bandpass5_norm, mode='same', boundary='symm')
         elif self.bandpass_type == 'bandpass5_sep':
             v_kernel = self.k_bandpass5_1d.reshape(-1, 1)
