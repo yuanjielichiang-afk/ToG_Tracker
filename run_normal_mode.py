@@ -17,7 +17,10 @@ ToG Tracker: Standalone Normal Mode Runner (純自主追蹤執行器)
 """
 
 import os
+import re
+import csv
 import sys
+import shutil
 import argparse
 import json
 from datetime import datetime
@@ -46,6 +49,9 @@ def find_raw_file(raw_input):
         r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass",
         r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_MousePad\RAW",
         r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_MousePad",
+        r"C:\Data\testPattern玻璃\20260529\Circle\Clean Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image",
+        r"C:\Data\testPattern玻璃\20260529\Circle\Clean Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_1ips\Image",
+        r"C:\Data\testPattern玻璃\20260529\Circle\Dirty Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image",
         r"C:\Data\DATA_FAMS\FAMS_GLASS",
         os.getcwd()
     ]
@@ -90,36 +96,22 @@ def compute_temporal_median_fpn(raw_path, header, n_samples=300):
         return None
     return np.median(sampled, axis=0)
 
-def get_smart_output_dir(raw_path, base_out=None, tag=None):
-    """
-    智能階層輸出目錄生成器 (Smart Hierarchical Output Directory Resolver)
-    
-    徹底解決 Clean Glass 與 Dirty Glass (或不同測試條件) 同檔名導致的覆蓋衝突。
-    自動擷取路徑中的關鍵鑑別目錄（如 Clean Glass / Dirty Glass、半徑、速度等），
-    並過濾掉無鑑別度的中介容器層（如 Image, RAW, Trace, CSV）。
-    
-    範例：
-      輸入: C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_0.1ips\\Image\\P3950_Circle_0.5inch_1rev_0.1ips-1.raw
-      輸出: normal_mode_output/20260529/Circle/Clean_Glass/Radius_0.5_inch/P3950_Circle_0.5inch_1rev_0.1ips/P3950_Circle_0.5inch_1rev_0.1ips-1/
-    """
-    if base_out:
-        return os.path.abspath(base_out)
-
+def _extract_subpath_and_seq(raw_path):
+    """擷取資料集相對階層路徑 (dataset_subpath) 與序列名稱 (seq_name)"""
     abs_path = os.path.abspath(raw_path)
     seq_name = os.path.splitext(os.path.basename(abs_path))[0]
-    
-    # 搜尋已知的資料集根目錄標記
+
     known_roots = ["testPattern玻璃", "DATA_FAMS", "ToG_Tracker", "Data"]
     parts = os.path.normpath(abs_path).split(os.sep)
     lower_parts = [p.lower() for p in parts]
-    
+
     matched_parts = None
     for r in known_roots:
         if r.lower() in lower_parts:
             idx = lower_parts.index(r.lower())
-            matched_parts = parts[idx + 1:-1] # 排除根與檔名
+            matched_parts = parts[idx + 1:-1]
             break
-            
+
     if matched_parts and len(matched_parts) > 0:
         filtered = [p.replace(' ', '_') for p in matched_parts if p.upper() not in ['IMAGE', 'RAW', 'TRACE', 'CSV', 'DATA']]
         subpath = os.path.join(*filtered) if filtered else ''
@@ -129,13 +121,63 @@ def get_smart_output_dir(raw_path, base_out=None, tag=None):
         if p_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
             p_name = os.path.basename(os.path.dirname(p_dir))
         subpath = p_name.replace(' ', '_')
+    return subpath, seq_name
 
-    folder_name = seq_name
+
+def resolve_output_paths(raw_path, base_out=None, tag=None, filter_type='bandpass3x7',
+                         fpn_mode='csbc', gain_norm='none', no_timestamp=False):
+    """
+    版本化輸出路徑解析器：
+      - 若指定 --out，直接寫入該指定路徑 (latest_dir / index_csv 為 None)。
+      - 否則建立：normal_mode_output/<dataset_subpath>/<seq_name>/
+          ├── runs/<YYYYMMDD_HHMMSS>_<flt>_<fpn>[_gn<mode>][_<tag>]/
+          ├── latest/           (永遠同步最新一次輸出的 CSV / JSON / PNG)
+          └── runs_index.csv    (所有歷史執行的索引總表)
+    """
+    if base_out:
+        return os.path.abspath(base_out), None, None, os.path.basename(os.path.abspath(base_out))
+
+    subpath, seq_name = _extract_subpath_and_seq(raw_path)
+    seq_root = os.path.abspath(os.path.join(SCRIPT_DIR, "normal_mode_output", subpath, seq_name))
+
+    filter_short_map = {
+        'bandpass3x7': 'bp3x7',
+        'bandpass3x7_r0': 'bp3x7r0',
+        'bandpass5x7': 'bp5x7',
+        'bandpass7': 'bp7',
+        'bandpass5': 'bp5',
+        'bandpass5_sep': 'bp5sep',
+        'optnavi_ctrl': 'optnavi',
+        'none': 'none',
+    }
+    flt_short = filter_short_map.get(filter_type.lower(), filter_type.lower())
+    prefix = "latest" if no_timestamp else datetime.now().strftime("%Y%m%d_%H%M%S")
+    parts = [prefix, flt_short, fpn_mode.lower()]
+    if gain_norm and gain_norm.lower() != 'none':
+        parts.append(f"gn{gain_norm.lower()}")
     if tag:
-        folder_name += f"_{tag}"
+        parts.append(tag.strip().replace(' ', '_'))
+    run_id = "_".join(parts)
 
-    out_dir = os.path.join(SCRIPT_DIR, "normal_mode_output", subpath, folder_name)
-    return os.path.abspath(out_dir)
+    runs_dir = os.path.join(seq_root, "runs")
+    os.makedirs(runs_dir, exist_ok=True)
+    out_dir = os.path.join(runs_dir, run_id)
+    if not no_timestamp and os.path.exists(out_dir):
+        suffix_idx = 1
+        while os.path.exists(f"{out_dir}_{suffix_idx:02d}"):
+            suffix_idx += 1
+        run_id = f"{run_id}_{suffix_idx:02d}"
+        out_dir = os.path.join(runs_dir, run_id)
+
+    latest_dir = os.path.join(seq_root, "latest")
+    index_csv = os.path.join(seq_root, "runs_index.csv")
+    return os.path.abspath(out_dir), os.path.abspath(latest_dir), os.path.abspath(index_csv), run_id
+
+
+def get_smart_output_dir(raw_path, base_out=None, tag=None):
+    """相容舊介面的智能階層輸出目錄解析 (預設版本化)"""
+    out_dir, _, _, _ = resolve_output_paths(raw_path, base_out=base_out, tag=tag)
+    return out_dir
 
 def fit_kasa_circle(xs, ys):
     """Kasa 最小平方法正圓擬合，回傳 (xc, yc, r_fit, radial_rmse_px, aspect_ratio_xy)"""
@@ -152,11 +194,37 @@ def fit_kasa_circle(xs, ys):
     aspect = float(np.ptp(xs) / (np.ptp(ys) + 1e-6))
     return xc, yc, r_fit, radial_rmse, aspect
 
+def load_gth_xy_safe(csv_path, expected_len):
+    """安全讀取含 UTF-8 BOM 與 # Metadata 註解標頭的 GTH CSV，避免 np.genfromtxt 解析異常"""
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        data_lines = [line for line in f if line.strip() and not line.lstrip().startswith("#")]
+    if len(data_lines) < 2:
+        return None
+    reader = csv.DictReader(data_lines)
+    if not reader.fieldnames:
+        return None
+    fields = [c.strip() for c in reader.fieldnames]
+    x_col = "x_px" if "x_px" in fields else ("x" if "x" in fields else None)
+    y_col = "y_px" if "y_px" in fields else ("y" if "y" in fields else None)
+    if not x_col or not y_col:
+        return None
+    gx, gy = [], []
+    for row in reader:
+        try:
+            gx.append(float(row[x_col]))
+            gy.append(float(row[y_col]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    if len(gx) != expected_len:
+        return None
+    return np.asarray(gx, dtype=np.float64), np.asarray(gy, dtype=np.float64)
+
+
 def compute_circle_and_global_rmse(xs, ys, raw_path):
     """
     計算圓度誤差與全域軌跡誤差均方根 (Global Trajectory RMSE)：
-      1. 優先尋找對應的 step2/experiments `*_ground_truth.csv`，計算嚴格逐幀全域軌跡誤差均方根。
-      2. 次之尋找同目錄或 `../Trace/` 的 P3950 參考 CSV，依運動弧長線性重採樣並做 2D Procrustes 對齊後計算 RMSE。
+      1. 優先尋找該測試資料集目錄下的 `GTH/<seq>_ground_truth.csv`，次之搜尋既有 experiments/step2_output GTH。
+      2. 若無 GTH，尋找同目錄或 `../Trace/` 的 P3950 參考 CSV，依運動弧長線性重採樣並做 2D Procrustes 對齊後計算 RMSE。
       3. 若無外部真值 CSV，則以 Kasa 最佳擬合正圓計算軌跡均方根誤差 (Ideal_Circle_Fit)。
     """
     xc, yc, r_fit, radial_rmse, aspect = fit_kasa_circle(xs, ys)
@@ -167,19 +235,22 @@ def compute_circle_and_global_rmse(xs, ys, raw_path):
     if parent_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
         parent_name = os.path.basename(os.path.dirname(raw_dir))
 
-    # 1. 尋找完整 GTH CSV
+    # 1. 最優先搜尋 Dataset 目錄下的 GTH/，再搜尋既有專案 experiments / step2_output
     gth_candidates = [
-        os.path.join(SCRIPT_DIR, "experiments", parent_name, seq_name, f"{seq_name}_ground_truth.csv"),
-        os.path.join(SCRIPT_DIR, "step2_output", f"{seq_name}_ground_truth.csv"),
+        (os.path.join(raw_dir, "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(os.path.dirname(raw_dir), "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(raw_dir, f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(SCRIPT_DIR, "experiments", parent_name, seq_name, f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(SCRIPT_DIR, "step2_output", f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
     ]
-    for gp in gth_candidates:
+    for gp, ref_label in gth_candidates:
         if os.path.exists(gp):
             try:
-                gth_data = np.genfromtxt(gp, delimiter=',', names=True)
-                if len(gth_data) == N and 'x_px' in gth_data.dtype.names and 'y_px' in gth_data.dtype.names:
-                    gx, gy = gth_data['x_px'], gth_data['y_px']
+                loaded = load_gth_xy_safe(gp, N)
+                if loaded is not None:
+                    gx, gy = loaded
                     rmse = float(np.sqrt(np.mean((xs - gx)**2 + (ys - gy)**2)))
-                    return xc, yc, r_fit, radial_rmse, aspect, rmse, f"GTH ({os.path.basename(gp)})"
+                    return xc, yc, r_fit, radial_rmse, aspect, rmse, ref_label
             except Exception:
                 pass
 
@@ -237,6 +308,12 @@ def main():
                         help="單級前處理濾波器 (預設: bandpass3x7 扁長方形核，IC 僅需 2 條 Line Buffer；optnavi_ctrl 為 OptNavi box2+saddle3+corner 對照組)")
     parser.add_argument("--bandpass", action="store_true", default=True, help="啟用帶通濾波器前處理 (相容舊參數)")
     parser.add_argument("--no-bandpass", dest="bandpass", action="store_false", help="關閉帶通濾波器")
+    parser.add_argument("--gain-norm", default="none", choices=["none", "median", "mean"],
+                        help="全幀曝光亮度增益正規化模式 (0 額外 LineBuf: none=關閉, median=中位數比例, mean=連續浮點均值比例)")
+    parser.add_argument("--zncc-coast-th", type=float, default=None,
+                        help="ZNCC 無紋理慣性滑行門檻 (預設 None；Clean Glass 對照測試可設如 0.55)")
+    parser.add_argument("--no-timestamp", action="store_true", default=False,
+                        help="停用時間戳記子目錄，固定覆寫寫入 runs/latest_<config>/")
     args = parser.parse_args()
 
     raw_path = find_raw_file(args.raw)
@@ -257,12 +334,21 @@ def main():
         filter_type = 'none'
 
     fpn_mode = 'full' if args.fpn else args.fpn_mode.lower()
+    gain_norm_mode = args.gain_norm.lower()
     if is_mousepad and fpn_mode == 'csbc' and filter_type != 'optnavi_ctrl':
         # 布質滑鼠墊紋理極強，單級 3x3 Corner 在 0-Byte 無 FPN 下即達 1.60 px 閉環誤差
         fpn_mode = 'none'
 
-    # 決定輸出目錄 (智慧階層解析，永不衝突)
-    out_dir = get_smart_output_dir(raw_path, args.out, args.tag)
+    # 決定版本化輸出目錄 (runs/<timestamp>_<config>/ + latest/ + runs_index.csv)
+    out_dir, latest_dir, index_csv, run_id = resolve_output_paths(
+        raw_path,
+        base_out=args.out,
+        tag=args.tag,
+        filter_type=filter_type,
+        fpn_mode=fpn_mode,
+        gain_norm=gain_norm_mode,
+        no_timestamp=args.no_timestamp
+    )
     os.makedirs(out_dir, exist_ok=True)
 
     header = OpniRawIO.read_header(raw_path)
@@ -300,20 +386,23 @@ def main():
     print(f"  原始 RAW 檔案: {raw_path}")
     print(f"  影像規格      : {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS")
     print(f"  單級特徵濾波  : {filter_type.upper()} ({hw_specs['desc']})")
-    print(f"  FPN 抑制架構  : {fpn_desc_map[fpn_mode]}")
+    print(f"  FPN 抑制架構  : {fpn_desc_map[fpn_mode]} | 增益正規化={gain_norm_mode.upper()}")
     print(f"  IC 硬體資源   : Line Buffer={hw_specs['line_buffers']} 條 (減省 {hw_specs['sram_savings_pct']:.1f}%), FPN記憶體={fpn_mem_bytes}B (減省 {fpn_mem_saving_pct:.1f}%), MAC/Pix={hw_specs['macs_per_pix']}")
-    print(f"  智能輸出目錄  : {out_dir}")
+    print(f"  版本化輸出目錄: {out_dir}")
     print("=" * 78)
 
-    # 1. 確定追蹤參數與準備 FPN / CSBC 模型
+    # 1. 確定追蹤參數與準備 FPN / CSBC 模型 (精確匹配 >=1 ips 之高速序列，排除 0.1ips / 0.02ips / 0.005ips)
     if args.radius is not None:
         search_radius = args.radius
     else:
-        search_radius = 2 if (w >= 64 or '4ips' in raw_path.lower() or '5ips' in raw_path.lower()) else 1
+        is_high_ips = bool(re.search(r'(?<![\d.])(?:[1-9]\d*)ips', raw_path.lower()))
+        search_radius = 2 if (w >= 64 or is_high_ips) else 1
 
+    max_phys_v = max(2.0, search_radius * 2.0) if search_radius >= 2 else None
     use_bandpass = (filter_type != 'none')
     fpn_model = None
     static_bias_table = None
+    ref_bg_level = None
 
     if fpn_mode == 'full':
         if args.fpn and os.path.exists(args.fpn):
@@ -323,14 +412,26 @@ def main():
                 fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
         else:
             existing_fpn = find_existing_fpn(raw_path)
-            if existing_fpn:
+            if existing_fpn and gain_norm_mode == 'none':
                 print(f"[1/3] 載入已校準整張 FPN 模型: {existing_fpn}")
                 fpn_hdr = OpniRawIO.read_header(existing_fpn)
                 with open(existing_fpn, 'rb') as f:
                     fpn_model = OpniRawIO.load_frame(f, fpn_hdr, 0).astype(np.float32)
             else:
                 print("[1/3] 使用全序列時間中位數提取整張 FPN 模型 (1296 Bytes)...")
-                fpn_model = compute_temporal_median_fpn(raw_path, header)
+                if gain_norm_mode in ('median', 'mean'):
+                    helper_gn = NormalModeTracker(gain_norm_mode=gain_norm_mode)
+                    sample_step = max(1, total_frames // 300)
+                    sampled = []
+                    with open(raw_path, 'rb') as f:
+                        for idx in range(0, total_frames, sample_step):
+                            frm = OpniRawIO.load_frame(f, header, idx)
+                            if frm is not None:
+                                sampled.append(helper_gn.normalize_frame_gain(frm))
+                    fpn_model = np.median(sampled, axis=0).astype(np.float32) if sampled else None
+                    ref_bg_level = helper_gn.ref_bg_level
+                else:
+                    fpn_model = compute_temporal_median_fpn(raw_path, header)
     elif fpn_mode == 'csbc':
         print("[1/3] 執行 CSBC 跨幀線上自校準 (不儲存任何 FPN 影像，僅提取 41 個對稱相關純量 = 82 Bytes)...")
         proto = NormalModeTracker(
@@ -338,7 +439,8 @@ def main():
             fpn_model=None,
             use_corner_filter=use_corner_filter,
             use_bandpass_filter=use_bandpass,
-            bandpass_type=filter_type
+            bandpass_type=filter_type,
+            gain_norm_mode=gain_norm_mode
         )
         max_lag_csbc = max(4, search_radius + 3)
         with open(raw_path, 'rb') as f_cal:
@@ -348,13 +450,14 @@ def main():
                 preprocess_fn=proto.preprocess_frame,
                 max_lag=max_lag_csbc
             )
+        ref_bg_level = proto.ref_bg_level
     else:
         print("[1/3] 極致 0-Byte 無 FPN 模式：完全不載入任何背景模型，純靠單級零均值濾波器抑制光暈！")
 
     if use_corner_filter:
         print("  [提示] 偵測到滑鼠墊紋理，啟用單級 3x3 4-Corner 抗鋸齒濾波器 (僅用 2 條 Line Buffer，免串聯)")
 
-    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, 次像素解算: 解析解 2D 橢圓拋物面)...")
+    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, max_phys_v={max_phys_v}, 次像素解算: 解析解 2D 橢圓拋物面)...")
     tracker = NormalModeTracker(
         search_radius=search_radius,
         subpixel_scale=32,
@@ -365,7 +468,11 @@ def main():
         use_corner_filter=use_corner_filter,
         use_bandpass_filter=use_bandpass,
         bandpass_type=filter_type,
-        static_bias_table=static_bias_table
+        max_phys_v=max_phys_v,
+        static_bias_table=static_bias_table,
+        gain_norm_mode=gain_norm_mode,
+        ref_bg_level=ref_bg_level,
+        zncc_coast_th=args.zncc_coast_th
     )
 
     # 3. 逐幀執行追蹤
@@ -420,13 +527,15 @@ def main():
 
     with f_csv as f:
         f.write(f"# RAW_SOURCE: {raw_path}\n")
+        f.write(f"# OUTPUT_RUN_ID: {run_id}\n")
         f.write(f"# PROCESSED_AT: {now_iso}\n")
         f.write(f"# SPECS: {w}x{h}, {total_frames} frames, {fps} fps, {bit_depth}-bit\n")
         f.write(f"# FEATURE_GENERATION_PIPELINE:\n")
+        f.write(f"#   0. Gain_Normalization: {gain_norm_mode.upper()}\n")
         f.write(f"#   1. FPN_Suppression_Mode: {fpn_mode.upper()} ({fpn_desc_map[fpn_mode]})\n")
         f.write(f"#   2. Single_Stage_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
         f.write(f"#   3. Corner_Filter: {'Enabled (OptNavi 4-Corner 0/45/90/135 deg)' if (use_corner_filter or filter_type == 'optnavi_ctrl') else 'Disabled (單級直出無串聯)'}\n")
-        f.write(f"#   4. SQUAL_&_Textureless_Gate: {'CSBC 純淨微塵能量檢測 + 無紋理慣性滑行 (Coasting)' if fpn_mode == 'csbc' else f'3x3 Laplacian Variance (閾值={tracker.squal_th})'}\n")
+        f.write(f"#   4. SQUAL_&_Textureless_Gate: {'CSBC 純淨微塵能量檢測 + 無紋理慣性滑行 (Coasting)' if fpn_mode == 'csbc' else f'3x3 Laplacian Variance (閾值={tracker.squal_th}, ZNCC_Coast={args.zncc_coast_th})'}\n")
         f.write(f"#   5. Correlation_Surface: {'CSBC 去靜態偏置協方差曲面' if fpn_mode == 'csbc' else 'ZNCC 面積補償相關曲面'} (搜尋半徑={search_radius})\n")
         f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (+ 安全1D退避, 1/32 px)\n")
         f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (視窗高={hw_specs['win_rows']}列, 節省 {hw_specs['sram_savings_pct']:.1f}%), FPN_Memory={fpn_mem_bytes} Bytes (節省 {fpn_mem_saving_pct:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel\n")
@@ -447,6 +556,7 @@ def main():
         },
         "execution_info": {
             "timestamp": now_iso,
+            "run_id": run_id,
             "output_directory": out_dir,
             "command_args": sys.argv[1:]
         },
@@ -458,6 +568,7 @@ def main():
             "total_frames": total_frames
         },
         "hardware_and_algorithm_config": {
+            "gain_norm_mode": gain_norm_mode,
             "fpn_mode": fpn_mode,
             "fpn_memory_bytes": fpn_mem_bytes,
             "fpn_memory_savings_pct": round(fpn_mem_saving_pct, 1),
@@ -469,6 +580,8 @@ def main():
             "mac_savings_pct": hw_specs['mac_savings_pct'],
             "use_corner_filter": bool(use_corner_filter or filter_type == 'optnavi_ctrl'),
             "search_radius": search_radius,
+            "max_phys_v": float(tracker.max_phys_v),
+            "zncc_coast_th": args.zncc_coast_th,
             "subpixel_method": "analytical_2d_paraboloid",
             "subpixel_scale": 32,
             "keyframe_dist": 2.5,
@@ -497,16 +610,18 @@ def main():
     print(f"[完成] 已成功記錄結構化元數據日誌: {meta_path}")
 
     # 6. 繪製並儲存軌跡圖 (含最佳擬合理想正圓參考虛線)
+    plot_path = None
     if args.plot and len(xs) > 1:
         plot_path = os.path.join(out_dir, "Track_B_NormalMode_plot.png")
         plt.figure(figsize=(8, 8))
         if r_est > 1.0:
             th = np.linspace(0, 2 * np.pi, 360)
             plt.plot(xc + r_est * np.cos(th), yc + r_est * np.sin(th), color='#94a3b8', linestyle='--', linewidth=1.2, label=f'Fitted Circle (R={r_est:.1f}px)')
-        plt.plot(xs, ys, color='#2563eb', linewidth=1.6, label=f'Normal Mode ({filter_type}, fpn={fpn_mode})')
+        gn_tag = f", gn={gain_norm_mode}" if gain_norm_mode != 'none' else ""
+        plt.plot(xs, ys, color='#2563eb', linewidth=1.6, label=f'Normal Mode ({filter_type}, fpn={fpn_mode}, r={search_radius}{gn_tag})')
         plt.scatter(xs[0], ys[0], color='#10b981', s=80, marker='o', edgecolors='black', label='Start (0, 0)', zorder=5)
         plt.scatter(xs[-1], ys[-1], color='#ef4444', s=80, marker='s', edgecolors='black', label=f'End ({xs[-1]:.1f}, {ys[-1]:.1f})', zorder=5)
-        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B)\nE_close={closure_error_px:.2f}px | Global_RMSE={global_traj_rmse_px:.2f}px | RadRMSE={radial_rmse_px:.2f}px | X/Y={aspect_ratio_xy:.3f}", fontsize=10, fontweight='bold')
+        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B, r={search_radius}{gn_tag})\nE_close={closure_error_px:.2f}px | Global_RMSE={global_traj_rmse_px:.2f}px | RadRMSE={radial_rmse_px:.2f}px | X/Y={aspect_ratio_xy:.3f}", fontsize=10, fontweight='bold')
         plt.xlabel("Accumulated X (pixels)", fontsize=11)
         plt.ylabel("Accumulated Y (pixels)", fontsize=11)
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -516,6 +631,35 @@ def main():
         plt.savefig(plot_path, dpi=150)
         plt.close()
         print(f"[完成] 已生成軌跡視覺化圖: {plot_path}")
+
+    # 7. 同步 latest/ 目錄並追加版本索引至 runs_index.csv (不覆蓋任何歷史 run)
+    if latest_dir:
+        os.makedirs(latest_dir, exist_ok=True)
+        for src_p, dst_name in [(csv_target, "Track_B_NormalMode.csv"), (meta_path, "run_meta.json"), (plot_path, "Track_B_NormalMode_plot.png")]:
+            if src_p and os.path.exists(src_p):
+                try:
+                    shutil.copy2(src_p, os.path.join(latest_dir, dst_name))
+                except PermissionError:
+                    pass
+    if index_csv:
+        new_file = not os.path.exists(index_csv) or os.path.getsize(index_csv) == 0
+        try:
+            with open(index_csv, "a", encoding="utf-8-sig", newline="") as f_idx:
+                writer = csv.writer(f_idx)
+                if new_file:
+                    writer.writerow([
+                        "timestamp", "run_id", "filter", "fpn_mode", "gain_norm",
+                        "search_radius", "zncc_coast_th", "closure_error_px", "radius_px",
+                        "radial_rmse_px", "global_traj_rmse_px", "rmse_ref_type", "aspect_xy", "output_dir"
+                    ])
+                writer.writerow([
+                    now_iso, run_id, filter_type, fpn_mode, gain_norm_mode,
+                    search_radius, "" if args.zncc_coast_th is None else args.zncc_coast_th,
+                    f"{closure_error_px:.2f}", f"{r_est:.2f}", f"{radial_rmse_px:.2f}",
+                    f"{global_traj_rmse_px:.2f}", rmse_ref_type, f"{aspect_ratio_xy:.3f}", out_dir
+                ])
+        except PermissionError:
+            pass
 
     # 終端機統計摘要
     print("\n" + "=" * 75)

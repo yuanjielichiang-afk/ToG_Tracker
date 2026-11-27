@@ -1,0 +1,53 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\20251226\\P3950_Glass 1_Circle_0.1inch_1rev_0.005ips\\Location 1\\MIA P3950_Glass 1_P3950_Circle_0.1inch_1rev_0.005ips-1.raw",
+    "filename": "MIA P3950_Glass 1_P3950_Circle_0.1inch_1rev_0.005ips-1.raw",
+    "size_bytes": 11011104,
+    "modified_time": "2025-12-26T16:00:46"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-25T16:54:35.151071",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\20251226\\P3950_Glass_1_Circle_0.1inch_1rev_0.005ips\\Location_1\\MIA P3950_Glass 1_P3950_Circle_0.1inch_1rev_0.005ips-1",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\20251226\\P3950_Glass 1_Circle_0.1inch_1rev_0.005ips\\Location 1\\MIA P3950_Glass 1_P3950_Circle_0.1inch_1rev_0.005ips-1.raw"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 76,
+    "total_frames": 8444
+  },
+  "hardware_and_algorithm_config": {
+    "filter_type": "bandpass5",
+    "line_buffer_lines": 5,
+    "macs_per_pixel": 25,
+    "sram_savings_pct": 44.4,
+    "mac_savings_pct": 69.1,
+    "search_radius": 1,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 8444,
+    "active_moving_frames": 7947,
+    "active_moving_ratio": 0.9411416390336333,
+    "closure_error_px": 27.56,
+    "estimated_circle_radius_px": 63.35,
+    "circle_center_px": [
+      63.44,
+      -10.14
+    ],
+    "final_position_px": [
+      -2.91,
+      -27.41
+    ],
+    "mean_speed_px_per_frame": 0.211,
+    "max_speed_px_per_frame": 2.055,
+    "mean_squal": 61.0
+  }
+}

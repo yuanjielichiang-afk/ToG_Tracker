@@ -1,0 +1,53 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.8 inch\\P3950_Circle_0.8inch_1rev_1ips\\Image\\P3950_Circle_0.8inch_1rev_1ips-1.raw",
+    "filename": "P3950_Circle_0.8inch_1rev_1ips-1.raw",
+    "size_bytes": 4678880,
+    "modified_time": "2026-05-29T11:18:34"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-25T16:52:38.110692",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\20260529\\Circle\\Clean_Glass\\Radius_0.8_inch\\P3950_Circle_0.8inch_1rev_1ips\\P3950_Circle_0.8inch_1rev_1ips-1",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.8 inch\\P3950_Circle_0.8inch_1rev_1ips\\Image\\P3950_Circle_0.8inch_1rev_1ips-1.raw"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 332,
+    "total_frames": 3588
+  },
+  "hardware_and_algorithm_config": {
+    "filter_type": "bandpass5",
+    "line_buffer_lines": 5,
+    "macs_per_pixel": 25,
+    "sram_savings_pct": 44.4,
+    "mac_savings_pct": 69.1,
+    "search_radius": 1,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 3588,
+    "active_moving_frames": 3342,
+    "active_moving_ratio": 0.931438127090301,
+    "closure_error_px": 47.89,
+    "estimated_circle_radius_px": 655.02,
+    "circle_center_px": [
+      -370.65,
+      -408.34
+    ],
+    "final_position_px": [
+      32.62,
+      -35.06
+    ],
+    "mean_speed_px_per_frame": 1.276,
+    "max_speed_px_per_frame": 2.83,
+    "mean_squal": 245.2
+  }
+}

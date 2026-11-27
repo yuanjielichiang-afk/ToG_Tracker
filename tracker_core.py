@@ -41,7 +41,10 @@ class NormalModeTracker:
                  use_bandpass_filter=False, bandpass_type='bandpass3x7',
                  subpixel_method='parabolic_2d',
                  max_phys_v=None,
-                 static_bias_table=None):
+                 static_bias_table=None,
+                 gain_norm_mode='none',
+                 ref_bg_level=None,
+                 zncc_coast_th=None):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
         self.keyframe_dist = keyframe_dist
@@ -56,6 +59,9 @@ class NormalModeTracker:
         self.subpixel_method = subpixel_method
         self.max_phys_v = max_phys_v if max_phys_v is not None else max(0.5, self.r * 1.0)
         self.static_bias_table = static_bias_table
+        self.gain_norm_mode = (gain_norm_mode or 'none').lower()
+        self.ref_bg_level = ref_bg_level
+        self.zncc_coast_th = zncc_coast_th
         if static_bias_table is not None:
             self.csbc_max_lag = (static_bias_table.shape[0] - 1) // 2
             self.csbc_bs00 = max(1e-4, float(static_bias_table[self.csbc_max_lag, self.csbc_max_lag]))
@@ -161,11 +167,25 @@ class NormalModeTracker:
         self.v_x = 0.0                 # 內部 IIR 平滑速度預估 (px/frame)
         self.v_y = 0.0                 # 內部 IIR 平滑速度預估 (px/frame)
 
+    def normalize_frame_gain(self, raw_frame):
+        """零 Line-Buffer 全幀曝光亮度增益正規化 (抑制 Clean Glass 曝光/反光漂移調制 FPN 殘影)"""
+        frm = raw_frame.astype(np.float32)
+        if self.gain_norm_mode not in ('median', 'mean'):
+            return frm
+        cur_bg = float(np.median(frm) if self.gain_norm_mode == 'median' else np.mean(frm))
+        if cur_bg < 1.0:
+            return frm
+        if self.ref_bg_level is None:
+            self.ref_bg_level = cur_bg
+            return frm
+        return frm * (float(self.ref_bg_level) / cur_bg)
+
     def remove_fpn(self, raw_frame):
-        """步驟 1: 消除感測器 Fixed Pattern Noise (FPN) 背景底噪"""
+        """步驟 1: 消除感測器 Fixed Pattern Noise (FPN) 背景底噪 (含可選增益正規化)"""
+        frm = self.normalize_frame_gain(raw_frame)
         if self.fpn_model is not None:
-            return raw_frame.astype(np.float32) - self.fpn_model
-        return raw_frame.astype(np.float32)
+            return frm - self.fpn_model
+        return frm
 
     def apply_bandpass_filter(self, frame):
         """
@@ -551,31 +571,47 @@ class NormalModeTracker:
                 self.last_dx_rel = 0.0
                 self.last_dy_rel = 0.0
         else:
-            dx_int = px + (u_idx - r)
-            dy_int = py + (v_idx - r)
+            if self.zncc_coast_th is not None and best_score < self.zncc_coast_th:
+                frame_dx = self.v_x
+                frame_dy = self.v_y
+                dx_q = self.last_dx_rel + frame_dx
+                dy_q = self.last_dy_rel + frame_dy
+                self.update_velocity_filter(frame_dx, frame_dy)
+                self.global_x += frame_dx
+                self.global_y += frame_dy
+                self.last_dx_rel = dx_q
+                self.last_dy_rel = dy_q
+                if math.hypot(self.last_dx_rel, self.last_dy_rel) >= self.max_ref_dist:
+                    self.ref_frame = cur_frame
+                    self.ref_idx = frame_idx
+                    self.last_dx_rel = 0.0
+                    self.last_dy_rel = 0.0
+            else:
+                dx_int = px + (u_idx - r)
+                dy_int = py + (v_idx - r)
 
-            dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
+                dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
 
-            dx_tot = dx_int + dx_sub
-            dy_tot = dy_int + dy_sub
+                dx_tot = dx_int + dx_sub
+                dy_tot = dy_int + dy_sub
 
-            dx_q = round(dx_tot * self.subpixel_scale) / self.subpixel_scale
-            dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
+                dx_q = round(dx_tot * self.subpixel_scale) / self.subpixel_scale
+                dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
 
-            frame_dx = dx_q - self.last_dx_rel
-            frame_dy = dy_q - self.last_dy_rel
+                frame_dx = dx_q - self.last_dx_rel
+                frame_dy = dy_q - self.last_dy_rel
 
-            # 更新速度濾波器 (防污染保護)
-            self.update_velocity_filter(frame_dx, frame_dy)
+                # 更新速度濾波器 (防污染保護)
+                self.update_velocity_filter(frame_dx, frame_dy)
 
-            # 更新全局累積位置
-            self.global_x += frame_dx
-            self.global_y += frame_dy
-            self.last_dx_rel = dx_q
-            self.last_dy_rel = dy_q
+                # 更新全局累積位置
+                self.global_x += frame_dx
+                self.global_y += frame_dy
+                self.last_dx_rel = dx_q
+                self.last_dy_rel = dy_q
 
-            # 更新 Keyframe
-            self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
+                # 更新 Keyframe
+                self.update_keyframe_if_needed(cur_frame, frame_idx, squal)
 
         return {
             'frame': frame_idx,

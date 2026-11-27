@@ -1,0 +1,4 @@
+﻿timestamp,run_id,filter,fpn_mode,gain_norm,search_radius,zncc_coast_th,closure_error_px,radius_px,radial_rmse_px,global_traj_rmse_px,rmse_ref_type,aspect_xy,output_dir
+2026-11-26T17:02:49.911943,20261126_170249_bp3x7_csbc,bandpass3x7,csbc,none,1,,8.52,167.24,1.44,22.92,GTH (POS1-1_ground_truth.csv),1.02,C:\PROJECT\ToG_Tracker\normal_mode_output\Circle_R0.2inch_IPS0.02_Glass\POS1-1\runs\20261126_170249_bp3x7_csbc
+2026-11-27T12:49:43.462794,20261127_124943_bp3x7_csbc,bandpass3x7,csbc,none,1,,8.52,167.24,1.44,16.72,Dataset_GTH (POS1-1_ground_truth.csv),1.020,C:\PROJECT\ToG_Tracker\normal_mode_output\Circle_R0.2inch_IPS0.02_Glass\POS1-1\runs\20261127_124943_bp3x7_csbc
+2026-11-27T12:49:47.077921,20261127_124947_bp3x7_csbc_gnmedian,bandpass3x7,csbc,median,1,,6.69,167.43,1.49,16.93,Dataset_GTH (POS1-1_ground_truth.csv),1.022,C:\PROJECT\ToG_Tracker\normal_mode_output\Circle_R0.2inch_IPS0.02_Glass\POS1-1\runs\20261127_124947_bp3x7_csbc_gnmedian

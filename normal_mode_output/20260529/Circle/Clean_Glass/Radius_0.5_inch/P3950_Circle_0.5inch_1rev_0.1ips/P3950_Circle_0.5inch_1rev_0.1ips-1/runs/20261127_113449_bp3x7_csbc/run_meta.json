@@ -1,0 +1,62 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_0.1ips\\Image\\P3950_Circle_0.5inch_1rev_0.1ips-1.raw",
+    "filename": "P3950_Circle_0.5inch_1rev_0.1ips-1.raw",
+    "size_bytes": 22379376,
+    "modified_time": "2026-05-29T11:33:30"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-27T11:34:49.197170",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\20260529\\Circle\\Clean_Glass\\Radius_0.5_inch\\P3950_Circle_0.5inch_1rev_0.1ips\\P3950_Circle_0.5inch_1rev_0.1ips-1",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_0.1ips\\Image\\P3950_Circle_0.5inch_1rev_0.1ips-1.raw"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 332,
+    "total_frames": 17162
+  },
+  "hardware_and_algorithm_config": {
+    "fpn_mode": "csbc",
+    "fpn_memory_bytes": 82,
+    "fpn_memory_savings_pct": 93.7,
+    "filter_type": "bandpass3x7",
+    "window_rows": 3,
+    "line_buffer_lines": 2,
+    "macs_per_pixel": 21,
+    "line_buffer_savings_pct": 66.7,
+    "mac_savings_pct": 57.1,
+    "use_corner_filter": false,
+    "search_radius": 1,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 17162,
+    "active_moving_frames": 16741,
+    "active_moving_ratio": 0.9754690595501689,
+    "closure_error_px": 97.56,
+    "estimated_circle_radius_px": 387.22,
+    "radial_rmse_px": 14.93,
+    "global_traj_rmse_px": 29.52,
+    "rmse_ref_type": "P3950_Aligned (P3950_Circle_0.5inch_1rev_0.1ips-1.csv)",
+    "aspect_ratio_xy": 1.025,
+    "circle_center_px": [
+      -334.97,
+      -253.99
+    ],
+    "final_position_px": [
+      -79.75,
+      56.2
+    ],
+    "mean_speed_px_per_frame": 0.172,
+    "max_speed_px_per_frame": 2.739,
+    "mean_squal": 633.1
+  }
+}

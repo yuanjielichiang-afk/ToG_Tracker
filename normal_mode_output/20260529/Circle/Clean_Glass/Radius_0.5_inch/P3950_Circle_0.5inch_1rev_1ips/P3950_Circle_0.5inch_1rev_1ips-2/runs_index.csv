@@ -1,0 +1,2 @@
+﻿timestamp,run_id,filter,fpn_mode,gain_norm,search_radius,zncc_coast_th,closure_error_px,radius_px,radial_rmse_px,global_traj_rmse_px,rmse_ref_type,aspect_xy,output_dir
+2026-11-27T11:38:37.200855,20261127_113837_bp3x7_csbc,bandpass3x7,csbc,none,1,,134.85,377.86,29.98,47.05,P3950_Aligned (P3950_Circle_0.5inch_1rev_1ips-2.csv),0.913,C:\PROJECT\ToG_Tracker\normal_mode_output\20260529\Circle\Clean_Glass\Radius_0.5_inch\P3950_Circle_0.5inch_1rev_1ips\P3950_Circle_0.5inch_1rev_1ips-2\runs\20261127_113837_bp3x7_csbc

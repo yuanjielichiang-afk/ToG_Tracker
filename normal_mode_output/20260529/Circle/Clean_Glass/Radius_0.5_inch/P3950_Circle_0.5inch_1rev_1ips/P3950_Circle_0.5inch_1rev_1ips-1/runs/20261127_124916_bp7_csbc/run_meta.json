@@ -1,0 +1,70 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_1ips\\Image\\P3950_Circle_0.5inch_1rev_1ips-1.raw",
+    "filename": "P3950_Circle_0.5inch_1rev_1ips-1.raw",
+    "size_bytes": 3060616,
+    "modified_time": "2026-05-29T11:28:08"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-27T12:49:16.071230",
+    "run_id": "20261127_124916_bp7_csbc",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\20260529\\Circle\\Clean_Glass\\Radius_0.5_inch\\P3950_Circle_0.5inch_1rev_1ips\\P3950_Circle_0.5inch_1rev_1ips-1\\runs\\20261127_124916_bp7_csbc",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\20260529\\Circle\\Clean Glass\\Radius 0.5 inch\\P3950_Circle_0.5inch_1rev_1ips\\Image\\P3950_Circle_0.5inch_1rev_1ips-1.raw",
+      "--filter",
+      "bandpass7",
+      "--fpn-mode",
+      "csbc"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 306,
+    "total_frames": 2347
+  },
+  "hardware_and_algorithm_config": {
+    "gain_norm_mode": "none",
+    "fpn_mode": "csbc",
+    "fpn_memory_bytes": 82,
+    "fpn_memory_savings_pct": 93.7,
+    "filter_type": "bandpass7",
+    "window_rows": 7,
+    "line_buffer_lines": 6,
+    "macs_per_pixel": 49,
+    "line_buffer_savings_pct": 0.0,
+    "mac_savings_pct": 0.0,
+    "use_corner_filter": false,
+    "search_radius": 2,
+    "max_phys_v": 4.0,
+    "zncc_coast_th": null,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 2347,
+    "active_moving_frames": 2229,
+    "active_moving_ratio": 0.9497230507030251,
+    "closure_error_px": 657.36,
+    "estimated_circle_radius_px": 418.44,
+    "radial_rmse_px": 81.59,
+    "global_traj_rmse_px": 446.15,
+    "rmse_ref_type": "Dataset_GTH (P3950_Circle_0.5inch_1rev_1ips-1_ground_truth.csv)",
+    "aspect_ratio_xy": 1.246,
+    "circle_center_px": [
+      -368.95,
+      -266.9
+    ],
+    "final_position_px": [
+      -653.24,
+      73.5
+    ],
+    "mean_speed_px_per_frame": 0.991,
+    "max_speed_px_per_frame": 5.72,
+    "mean_squal": 427.7
+  }
+}

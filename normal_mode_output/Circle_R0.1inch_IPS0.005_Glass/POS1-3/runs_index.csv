@@ -1,0 +1,3 @@
+﻿timestamp,run_id,filter,fpn_mode,gain_norm,search_radius,zncc_coast_th,closure_error_px,radius_px,radial_rmse_px,global_traj_rmse_px,rmse_ref_type,aspect_xy,output_dir
+2026-11-26T17:02:09.125214,20261126_170209_bp3x7_csbc,bandpass3x7,csbc,none,1,,2.07,87.16,1.5,8.48,P3950_Aligned (POS1-3.csv),0.975,C:\PROJECT\ToG_Tracker\normal_mode_output\Circle_R0.1inch_IPS0.005_Glass\POS1-3\runs\20261126_170209_bp3x7_csbc
+2026-11-27T12:50:35.871743,20261127_125035_bp3x7_csbc,bandpass3x7,csbc,none,1,,2.07,87.16,1.50,9.86,Dataset_GTH (POS1-3_ground_truth.csv),0.975,C:\PROJECT\ToG_Tracker\normal_mode_output\Circle_R0.1inch_IPS0.005_Glass\POS1-3\runs\20261127_125035_bp3x7_csbc

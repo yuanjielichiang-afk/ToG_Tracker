@@ -1,0 +1,70 @@
+{
+  "raw_file_info": {
+    "absolute_path": "C:\\Data\\testPattern玻璃\\Circle_R0.2inch_IPS0.02_Glass\\RAW\\POS1-1.raw",
+    "filename": "POS1-1.raw",
+    "size_bytes": 7006520,
+    "modified_time": "2025-12-02T17:31:20"
+  },
+  "execution_info": {
+    "timestamp": "2026-11-27T12:49:43.462794",
+    "run_id": "20261127_124943_bp3x7_csbc",
+    "output_directory": "C:\\PROJECT\\ToG_Tracker\\normal_mode_output\\Circle_R0.2inch_IPS0.02_Glass\\POS1-1\\runs\\20261127_124943_bp3x7_csbc",
+    "command_args": [
+      "C:\\Data\\testPattern玻璃\\Circle_R0.2inch_IPS0.02_Glass\\RAW\\POS1-1.raw",
+      "--filter",
+      "bandpass3x7",
+      "--fpn-mode",
+      "csbc"
+    ]
+  },
+  "image_specifications": {
+    "width": 36,
+    "height": 36,
+    "bit_depth": 8,
+    "fps": 82,
+    "total_frames": 5373
+  },
+  "hardware_and_algorithm_config": {
+    "gain_norm_mode": "none",
+    "fpn_mode": "csbc",
+    "fpn_memory_bytes": 82,
+    "fpn_memory_savings_pct": 93.7,
+    "filter_type": "bandpass3x7",
+    "window_rows": 3,
+    "line_buffer_lines": 2,
+    "macs_per_pixel": 21,
+    "line_buffer_savings_pct": 66.7,
+    "mac_savings_pct": 57.1,
+    "use_corner_filter": false,
+    "search_radius": 1,
+    "max_phys_v": 1.0,
+    "zncc_coast_th": null,
+    "subpixel_method": "analytical_2d_paraboloid",
+    "subpixel_scale": 32,
+    "keyframe_dist": 2.5,
+    "squal_threshold": 5.0,
+    "v_alpha": 0.25
+  },
+  "tracking_metrics": {
+    "total_frames_processed": 5373,
+    "active_moving_frames": 5315,
+    "active_moving_ratio": 0.9892052856876977,
+    "closure_error_px": 8.52,
+    "estimated_circle_radius_px": 167.24,
+    "radial_rmse_px": 1.44,
+    "global_traj_rmse_px": 16.72,
+    "rmse_ref_type": "Dataset_GTH (POS1-1_ground_truth.csv)",
+    "aspect_ratio_xy": 1.02,
+    "circle_center_px": [
+      166.64,
+      3.46
+    ],
+    "final_position_px": [
+      -1.19,
+      8.44
+    ],
+    "mean_speed_px_per_frame": 0.221,
+    "max_speed_px_per_frame": 1.498,
+    "mean_squal": 376.0
+  }
+}
