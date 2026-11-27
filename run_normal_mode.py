@@ -17,7 +17,6 @@ ToG Tracker: Standalone Normal Mode Runner (純自主追蹤執行器)
 """
 
 import os
-import re
 import csv
 import sys
 import shutil
@@ -220,6 +219,32 @@ def load_gth_xy_safe(csv_path, expected_len):
     return np.asarray(gx, dtype=np.float64), np.asarray(gy, dtype=np.float64)
 
 
+def find_matched_gth_xy(raw_path, expected_len):
+    """尋找與序列長度相符之 Dataset GTH / experiments GTH 座標 (gx, gy, ref_label)"""
+    seq_name = os.path.splitext(os.path.basename(raw_path))[0]
+    raw_dir = os.path.dirname(os.path.abspath(raw_path))
+    parent_name = os.path.basename(raw_dir)
+    if parent_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
+        parent_name = os.path.basename(os.path.dirname(raw_dir))
+
+    gth_candidates = [
+        (os.path.join(raw_dir, "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(os.path.dirname(raw_dir), "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(raw_dir, f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(SCRIPT_DIR, "experiments", parent_name, seq_name, f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
+        (os.path.join(SCRIPT_DIR, "step2_output", f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
+    ]
+    for gp, ref_label in gth_candidates:
+        if os.path.exists(gp):
+            try:
+                loaded = load_gth_xy_safe(gp, expected_len)
+                if loaded is not None:
+                    return loaded[0], loaded[1], ref_label
+            except Exception:
+                pass
+    return None
+
+
 def compute_circle_and_global_rmse(xs, ys, raw_path):
     """
     計算圓度誤差與全域軌跡誤差均方根 (Global Trajectory RMSE)：
@@ -231,28 +256,13 @@ def compute_circle_and_global_rmse(xs, ys, raw_path):
     N = len(xs)
     seq_name = os.path.splitext(os.path.basename(raw_path))[0]
     raw_dir = os.path.dirname(os.path.abspath(raw_path))
-    parent_name = os.path.basename(raw_dir)
-    if parent_name.upper() in ['IMAGE', 'RAW', 'TRACE', 'CSV']:
-        parent_name = os.path.basename(os.path.dirname(raw_dir))
 
     # 1. 最優先搜尋 Dataset 目錄下的 GTH/，再搜尋既有專案 experiments / step2_output
-    gth_candidates = [
-        (os.path.join(raw_dir, "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
-        (os.path.join(os.path.dirname(raw_dir), "GTH", f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
-        (os.path.join(raw_dir, f"{seq_name}_ground_truth.csv"), f"Dataset_GTH ({seq_name}_ground_truth.csv)"),
-        (os.path.join(SCRIPT_DIR, "experiments", parent_name, seq_name, f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
-        (os.path.join(SCRIPT_DIR, "step2_output", f"{seq_name}_ground_truth.csv"), f"GTH ({seq_name}_ground_truth.csv)"),
-    ]
-    for gp, ref_label in gth_candidates:
-        if os.path.exists(gp):
-            try:
-                loaded = load_gth_xy_safe(gp, N)
-                if loaded is not None:
-                    gx, gy = loaded
-                    rmse = float(np.sqrt(np.mean((xs - gx)**2 + (ys - gy)**2)))
-                    return xc, yc, r_fit, radial_rmse, aspect, rmse, ref_label
-            except Exception:
-                pass
+    matched = find_matched_gth_xy(raw_path, N)
+    if matched is not None:
+        gx, gy, ref_label = matched
+        rmse = float(np.sqrt(np.mean((xs - gx)**2 + (ys - gy)**2)))
+        return xc, yc, r_fit, radial_rmse, aspect, rmse, ref_label
 
     # 2. 尋找原相 P3950 參考 CSV (同目錄、../Trace/ 或 ../CSV/)
     p3950_candidates = [
@@ -312,6 +322,18 @@ def main():
                         help="全幀曝光亮度增益正規化模式 (0 額外 LineBuf: none=關閉, median=中位數比例, mean=連續浮點均值比例)")
     parser.add_argument("--zncc-coast-th", type=float, default=None,
                         help="ZNCC 無紋理慣性滑行門檻 (預設 None；Clean Glass 對照測試可設如 0.55)")
+    parser.add_argument("--predictor", default="shift_iir", choices=["shift_iir", "shift_fir4", "legacy_iir"],
+                        help="Stage A 速度預測器 (預設 shift_iir: IC零乘法移位IIR; shift_fir4: OptNavi 4幀平均; legacy_iir: 浮點對照)")
+    parser.add_argument("--max-phys-v", type=float, default=4.0,
+                        help="速度上限 (與 search_radius 解耦，預設 4.0 px/frame 使 r=1 可追蹤 1+ ips)")
+    parser.add_argument("--max-accel", type=float, default=4.0,
+                        help="預測器單幀創新量突波鉗位閾值 (px/frame, 預設 4.0)")
+    parser.add_argument("--coast-decay", type=int, default=0,
+                        help="無紋理連續滑行每 K 幀衰減 1/8 之間隔 (0=關閉, 預設 0)")
+    parser.add_argument("--no-auto-surface", action="store_true", default=False,
+                        help="停用滑鼠墊自動切換至 3x3 4-Corner，允許直接測試 bandpass3x7 等濾波器")
+    parser.add_argument("--numeric-mode", default="float", choices=["float"],
+                        help="數值模式 (Stage A 保留 float32 Golden Reference；Stage B 將擴充 fixed)")
     parser.add_argument("--no-timestamp", action="store_true", default=False,
                         help="停用時間戳記子目錄，固定覆寫寫入 runs/latest_<config>/")
     args = parser.parse_args()
@@ -322,7 +344,7 @@ def main():
         sys.exit(1)
 
     # 決定濾波器與單級多工模式
-    is_mousepad = 'mousepad' in raw_path.lower()
+    is_mousepad = ('mousepad' in raw_path.lower()) and (not args.no_auto_surface)
     filter_type = args.filter.lower()
     if not args.bandpass:
         filter_type = 'none'
@@ -335,8 +357,8 @@ def main():
 
     fpn_mode = 'full' if args.fpn else args.fpn_mode.lower()
     gain_norm_mode = args.gain_norm.lower()
-    if is_mousepad and fpn_mode == 'csbc' and filter_type != 'optnavi_ctrl':
-        # 布質滑鼠墊紋理極強，單級 3x3 Corner 在 0-Byte 無 FPN 下即達 1.60 px 閉環誤差
+    if is_mousepad and fpn_mode == 'csbc' and filter_type != 'optnavi_ctrl' and args.fpn_mode == 'csbc':
+        # 布質滑鼠墊紋理極強，單級 3x3 Corner 在 0-Byte 無 FPN 下免背景儲存即可追蹤
         fpn_mode = 'none'
 
     # 決定版本化輸出目錄 (runs/<timestamp>_<config>/ + latest/ + runs_index.csv)
@@ -382,23 +404,26 @@ def main():
     }
 
     print("\n" + "=" * 78)
-    print("  ToG Tracker: Normal Mode 獨立追蹤器 (Stage-3 IC 輕量化架構)")
+    print("  ToG Tracker: Normal Mode 獨立追蹤器 (Stage-A IC r=1 解耦架構)")
     print(f"  原始 RAW 檔案: {raw_path}")
-    print(f"  影像規格      : {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS")
+    print(f"  影像規格      : {w}x{h}, {bit_depth}-bit, {total_frames} 幀, {fps} FPS | 數值={args.numeric_mode.upper()}")
     print(f"  單級特徵濾波  : {filter_type.upper()} ({hw_specs['desc']})")
     print(f"  FPN 抑制架構  : {fpn_desc_map[fpn_mode]} | 增益正規化={gain_norm_mode.upper()}")
     print(f"  IC 硬體資源   : Line Buffer={hw_specs['line_buffers']} 條 (減省 {hw_specs['sram_savings_pct']:.1f}%), FPN記憶體={fpn_mem_bytes}B (減省 {fpn_mem_saving_pct:.1f}%), MAC/Pix={hw_specs['macs_per_pix']}")
     print(f"  版本化輸出目錄: {out_dir}")
     print("=" * 78)
 
-    # 1. 確定追蹤參數與準備 FPN / CSBC 模型 (精確匹配 >=1 ips 之高速序列，排除 0.1ips / 0.02ips / 0.005ips)
+    # 1. 確定追蹤參數與準備 FPN / CSBC 模型 (Stage A: 36x36 全速域統一使用 r=1 3x3 搜尋，靠準確 PP 覆蓋 1+ ips！)
     if args.radius is not None:
         search_radius = args.radius
     else:
-        is_high_ips = bool(re.search(r'(?<![\d.])(?:[1-9]\d*)ips', raw_path.lower()))
-        search_radius = 2 if (w >= 64 or is_high_ips) else 1
+        search_radius = 2 if (w >= 64) else 1
 
-    max_phys_v = max(2.0, search_radius * 2.0) if search_radius >= 2 else None
+    max_phys_v = float(args.max_phys_v)
+    search_candidates = (2 * search_radius + 1) ** 2
+    eff_w = (w - 6) if '3x7' in filter_type else (w - 2 * (search_radius + 2))
+    eff_h = (h - 2) if '3x7' in filter_type else (h - 2 * (search_radius + 2))
+    corr_macs_per_frame = search_candidates * max(64, eff_w * eff_h)
     use_bandpass = (filter_type != 'none')
     fpn_model = None
     static_bias_table = None
@@ -457,7 +482,7 @@ def main():
     if use_corner_filter:
         print("  [提示] 偵測到滑鼠墊紋理，啟用單級 3x3 4-Corner 抗鋸齒濾波器 (僅用 2 條 Line Buffer，免串聯)")
 
-    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius}, max_phys_v={max_phys_v}, 次像素解算: 解析解 2D 橢圓拋物面)...")
+    print(f"[2/3] 初始化 NormalModeTracker (搜尋半徑: {search_radius} [{search_candidates}點], predictor={args.predictor}, max_phys_v={max_phys_v}, 次像素: 解析解 2D 橢圓拋物面)...")
     tracker = NormalModeTracker(
         search_radius=search_radius,
         subpixel_scale=32,
@@ -472,7 +497,10 @@ def main():
         static_bias_table=static_bias_table,
         gain_norm_mode=gain_norm_mode,
         ref_bg_level=ref_bg_level,
-        zncc_coast_th=args.zncc_coast_th
+        zncc_coast_th=args.zncc_coast_th,
+        predictor_mode=args.predictor,
+        max_accel=args.max_accel,
+        coast_decay_interval=args.coast_decay
     )
 
     # 3. 逐幀執行追蹤
@@ -509,11 +537,13 @@ def main():
     ys = records[:, 4]
     squals = records[:, 5]
 
-    # 指標統計 (含全域軌跡誤差均方根與圓度指標)
+    # 指標統計 (含全域軌跡誤差均方根與圓度指標 + Stage A 診斷指標)
     speeds = np.sqrt(dxs**2 + dys**2)
     moving_mask = speeds > 0.01
     closure_error_px = float(np.sqrt((xs[-1] - xs[0])**2 + (ys[-1] - ys[0])**2))
     xc, yc, r_est, radial_rmse_px, aspect_ratio_xy, global_traj_rmse_px, rmse_ref_type = compute_circle_and_global_rmse(xs, ys, raw_path)
+    matched_gth = find_matched_gth_xy(raw_path, len(xs))
+    diag = tracker.get_diagnostics()
 
     # 4. 儲存標準 CSV 輸出 (含 Metadata Header 與 Feature Generation 完整配置，使用 utf-8-sig 防止 Excel 亂碼)
     csv_path = os.path.join(out_dir, "Track_B_NormalMode.csv")
@@ -536,10 +566,12 @@ def main():
         f.write(f"#   2. Single_Stage_Filter: {filter_type.upper()} ({hw_specs['desc']})\n")
         f.write(f"#   3. Corner_Filter: {'Enabled (OptNavi 4-Corner 0/45/90/135 deg)' if (use_corner_filter or filter_type == 'optnavi_ctrl') else 'Disabled (單級直出無串聯)'}\n")
         f.write(f"#   4. SQUAL_&_Textureless_Gate: {'CSBC 純淨微塵能量檢測 + 無紋理慣性滑行 (Coasting)' if fpn_mode == 'csbc' else f'3x3 Laplacian Variance (閾值={tracker.squal_th}, ZNCC_Coast={args.zncc_coast_th})'}\n")
-        f.write(f"#   5. Correlation_Surface: {'CSBC 去靜態偏置協方差曲面' if fpn_mode == 'csbc' else 'ZNCC 面積補償相關曲面'} (搜尋半徑={search_radius})\n")
-        f.write(f"#   6. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (+ 安全1D退避, 1/32 px)\n")
-        f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (視窗高={hw_specs['win_rows']}列, 節省 {hw_specs['sram_savings_pct']:.1f}%), FPN_Memory={fpn_mem_bytes} Bytes (節省 {fpn_mem_saving_pct:.1f}%), 運算量={hw_specs['macs_per_pix']} MAC/pixel\n")
+        f.write(f"#   5. Correlation_Surface: {'CSBC 去靜態偏置協方差曲面' if fpn_mode == 'csbc' else 'ZNCC 面積補償相關曲面'} (搜尋半徑={search_radius}, {search_candidates} 點, CorrMAC~={corr_macs_per_frame}/frame)\n")
+        f.write(f"#   6. Trajectory_Predictor: {args.predictor.upper()} (max_phys_v={max_phys_v}, max_accel={args.max_accel}, coast_decay={args.coast_decay}, numeric={args.numeric_mode})\n")
+        f.write(f"#   7. Subpixel_Interpolation: 解析解 2D 橢圓拋物面峰值擬合 (+ 安全1D退避, 1/32 px)\n")
+        f.write(f"# HARDWARE_RESOURCE: Line_Buffer={hw_specs['line_buffers']} 條 (視窗高={hw_specs['win_rows']}列, 節省 {hw_specs['sram_savings_pct']:.1f}%), FPN_Memory={fpn_mem_bytes} Bytes (節省 {fpn_mem_saving_pct:.1f}%), Filter={hw_specs['macs_per_pix']} MAC/pix, Corr={corr_macs_per_frame} MAC/frame\n")
         f.write(f"# TRACKING_METRICS: closure_error={closure_error_px:.2f}px, radius={r_est:.2f}px, radial_rmse={radial_rmse_px:.2f}px, global_traj_rmse={global_traj_rmse_px:.2f}px ({rmse_ref_type}), aspect_xy={aspect_ratio_xy:.3f}, mean_squal={np.mean(squals):.1f}\n")
+        f.write(f"# STAGE_A_DIAGNOSTICS: pp_center_hit={diag['pp_center_hit_pct']:.1f}%, border_hit={diag['border_hit_pct']:.1f}%, coast_ratio={diag['coast_ratio_pct']:.1f}%, recenter={diag['recenter_frames']}, kf_updates={diag['keyframe_updates']}, spike_clamped={diag['spike_clamped_frames']}\n")
         f.write("frame,dx,dy,x,y,squal\n")
         for i in range(len(records)):
             f.write(f"{int(frames_idx[i])},{dxs[i]:.4f},{dys[i]:.4f},{xs[i]:.4f},{ys[i]:.4f},{squals[i]:.2f}\n")
@@ -580,7 +612,13 @@ def main():
             "mac_savings_pct": hw_specs['mac_savings_pct'],
             "use_corner_filter": bool(use_corner_filter or filter_type == 'optnavi_ctrl'),
             "search_radius": search_radius,
+            "search_candidates": search_candidates,
+            "corr_macs_per_frame": corr_macs_per_frame,
+            "numeric_mode": args.numeric_mode,
+            "predictor_mode": args.predictor,
             "max_phys_v": float(tracker.max_phys_v),
+            "max_accel": float(args.max_accel),
+            "coast_decay_interval": int(args.coast_decay),
             "zncc_coast_th": args.zncc_coast_th,
             "subpixel_method": "analytical_2d_paraboloid",
             "subpixel_scale": 32,
@@ -603,7 +641,8 @@ def main():
             "mean_speed_px_per_frame": round(float(np.mean(speeds[moving_mask])) if np.any(moving_mask) else 0.0, 3),
             "max_speed_px_per_frame": round(float(np.max(speeds)), 3),
             "mean_squal": round(float(np.mean(squals)), 1)
-        }
+        },
+        "stage_a_diagnostics": diag
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta_data, f, indent=2, ensure_ascii=False)
@@ -614,14 +653,17 @@ def main():
     if args.plot and len(xs) > 1:
         plot_path = os.path.join(out_dir, "Track_B_NormalMode_plot.png")
         plt.figure(figsize=(8, 8))
+        if matched_gth is not None:
+            gx, gy, _ = matched_gth
+            plt.plot(gx, gy, color='#10b981', linestyle=':', linewidth=1.6, alpha=0.85, label='Dataset GTH')
         if r_est > 1.0:
             th = np.linspace(0, 2 * np.pi, 360)
             plt.plot(xc + r_est * np.cos(th), yc + r_est * np.sin(th), color='#94a3b8', linestyle='--', linewidth=1.2, label=f'Fitted Circle (R={r_est:.1f}px)')
         gn_tag = f", gn={gain_norm_mode}" if gain_norm_mode != 'none' else ""
-        plt.plot(xs, ys, color='#2563eb', linewidth=1.6, label=f'Normal Mode ({filter_type}, fpn={fpn_mode}, r={search_radius}{gn_tag})')
+        plt.plot(xs, ys, color='#2563eb', linewidth=1.6, label=f'Normal Mode ({filter_type}, fpn={fpn_mode}, r={search_radius}, {args.predictor}{gn_tag})')
         plt.scatter(xs[0], ys[0], color='#10b981', s=80, marker='o', edgecolors='black', label='Start (0, 0)', zorder=5)
         plt.scatter(xs[-1], ys[-1], color='#ef4444', s=80, marker='s', edgecolors='black', label=f'End ({xs[-1]:.1f}, {ys[-1]:.1f})', zorder=5)
-        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B, r={search_radius}{gn_tag})\nE_close={closure_error_px:.2f}px | Global_RMSE={global_traj_rmse_px:.2f}px | RadRMSE={radial_rmse_px:.2f}px | X/Y={aspect_ratio_xy:.3f}", fontsize=10, fontweight='bold')
+        plt.title(f"ToG Normal Mode: {os.path.basename(raw_path)}\nFilter: {filter_type.upper()} (LineBuf={hw_specs['line_buffers']}, FPN={fpn_mode.upper()}:{fpn_mem_bytes}B, r={search_radius} [{search_candidates}pt], {args.predictor}{gn_tag})\nE_close={closure_error_px:.2f}px | Global_RMSE={global_traj_rmse_px:.2f}px | RadRMSE={radial_rmse_px:.2f}px | X/Y={aspect_ratio_xy:.3f}", fontsize=10, fontweight='bold')
         plt.xlabel("Accumulated X (pixels)", fontsize=11)
         plt.ylabel("Accumulated Y (pixels)", fontsize=11)
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -678,6 +720,8 @@ def main():
     print(f"  平均單幀運動速度  : {np.mean(speeds[moving_mask]) if np.any(moving_mask) else 0.0:.3f} px/frame")
     print(f"  最大單幀運動速度  : {np.max(speeds):.3f} px/frame")
     print(f"  平均特徵品質 SQUAL: {np.mean(squals):.1f}")
+    print(f"  Stage A 預測統計  : PP中心命中={diag['pp_center_hit_pct']:.1f}%, 觸邊={diag['border_hit_pct']:.1f}% (重取樣={diag['recenter_frames']}), TL滑行={diag['coast_ratio_pct']:.1f}%, Ref換幀={diag['keyframe_updates']}, 突波鉗位={diag['spike_clamped_frames']}")
+    print(f"  相關搜尋估算算力  : r={search_radius} ({search_candidates} 點), CorrMAC ~ {corr_macs_per_frame}/frame")
     print("=" * 75 + "\n")
 
 if __name__ == '__main__':

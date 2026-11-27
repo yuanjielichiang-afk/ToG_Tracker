@@ -1,0 +1,14 @@
+﻿dataset,stage,r,candidates,corr_macs_per_frame,e_close,radius,rad_rmse,global_rmse,ref_label,aspect_xy,pp_center_hit_pct,border_hit_pct,recenter_frames,coast_ratio_pct,keyframe_updates,max_speed,spike_clamped
+0.1in_Glass_0.005ips,"Stage-3 (bp3x7+CSBC, r=1, legacy)",1,9,9180,11.09,84.77,1.21,10.83,Dataset_GTH (POS1-1_ground_truth.csv),1.021,88.13,11.87,1251,0.0,263,2.009,25
+0.1in_Glass_0.005ips,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,10.17,84.69,1.13,10.03,Dataset_GTH (POS1-1_ground_truth.csv),1.018,88.07,11.93,1258,0.0,262,2.054,0
+0.2in_Glass_0.02ips,"Stage-3 (bp3x7+CSBC, r=1, legacy)",1,9,9180,8.52,167.24,1.44,16.72,Dataset_GTH (POS1-1_ground_truth.csv),1.02,83.13,16.87,906,0.0,500,1.498,7
+0.2in_Glass_0.02ips,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,8.52,167.24,1.44,16.72,Dataset_GTH (POS1-1_ground_truth.csv),1.02,83.15,16.85,905,0.0,500,1.498,0
+0.2in_MousePad_0.02,"Stage-3 (corner3x3, r=1, legacy)",1,9,8100,1.6,170.41,2.45,22.11,Dataset_GTH (MousePad-1_ground_truth.csv),1.02,83.37,16.63,0,0.0,377,1.414,7
+0.2in_MousePad_0.02,"Stage-A (corner3x3_0B, r=1, shift_iir)",1,9,8100,1.6,170.41,2.45,22.11,Dataset_GTH (MousePad-1_ground_truth.csv),1.02,83.39,16.61,0,0.0,377,1.414,0
+0.2in_MousePad_0.02,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,11.16,159.56,1.32,8.27,Dataset_GTH (MousePad-1_ground_truth.csv),1.023,89.39,10.61,550,0.0,480,2.236,0
+0.5in_Dirty_0.1ips,"Stage-3 (bp3x7+CSBC, r=1, legacy)",1,9,9180,3.31,415.59,8.1,13.42,Dataset_GTH (P3950_Circle_0.5inch_1rev_0.1ips-1_ground_truth.csv),1.061,90.95,9.05,1233,0.0,1243,0.562,0
+0.5in_Dirty_0.1ips,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,3.31,415.59,8.1,13.42,Dataset_GTH (P3950_Circle_0.5inch_1rev_0.1ips-1_ground_truth.csv),1.061,90.95,9.05,1233,0.0,1243,0.562,0
+0.5in_Clean_0.1ips,"Stage-3 (bp3x7+CSBC, r=1, legacy)",1,9,9180,97.56,387.22,14.93,72.2,Dataset_GTH (P3950_Circle_0.5inch_1rev_0.1ips-1_ground_truth.csv),1.025,89.04,10.96,1809,3.8,1219,2.739,22
+0.5in_Clean_0.1ips,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,50.75,400.06,8.25,43.29,Dataset_GTH (P3950_Circle_0.5inch_1rev_0.1ips-1_ground_truth.csv),1.036,88.87,11.13,1843,3.55,1245,2.078,0
+0.5in_Clean_1.0ips,"Stage-3 (bp3x7+CSBC, r=2, legacy)",2,25,25500,93.05,379.99,17.43,61.72,Dataset_GTH (P3950_Circle_0.5inch_1rev_1ips-1_ground_truth.csv),1.01,80.04,1.35,31,2.39,940,4.678,0
+0.5in_Clean_1.0ips,"Stage-A (bp3x7+CSBC, r=1, shift_iir)",1,9,9180,39.22,398.64,9.75,26.08,Dataset_GTH (P3950_Circle_0.5inch_1rev_1ips-1_ground_truth.csv),1.013,80.91,19.09,435,2.86,958,3.758,0

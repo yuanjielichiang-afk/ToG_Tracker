@@ -44,7 +44,10 @@ class NormalModeTracker:
                  static_bias_table=None,
                  gain_norm_mode='none',
                  ref_bg_level=None,
-                 zncc_coast_th=None):
+                 zncc_coast_th=None,
+                 predictor_mode='shift_iir',
+                 max_accel=4.0,
+                 coast_decay_interval=0):
         self.r = search_radius
         self.subpixel_scale = subpixel_scale
         self.keyframe_dist = keyframe_dist
@@ -57,7 +60,11 @@ class NormalModeTracker:
         self.use_bandpass_filter = use_bandpass_filter
         self.bandpass_type = bandpass_type.lower() if bandpass_type else 'bandpass3x7'
         self.subpixel_method = subpixel_method
-        self.max_phys_v = max_phys_v if max_phys_v is not None else max(0.5, self.r * 1.0)
+        # Stage A: 徹底解除 max_phys_v 與 search_radius 的耦合，使 r=1 (3x3) 也能依靠準確 PP 追蹤 1+ ips 高速位移
+        self.max_phys_v = float(max_phys_v) if max_phys_v is not None else 4.0
+        self.predictor_mode = (predictor_mode or 'shift_iir').lower()
+        self.max_accel = float(max_accel)
+        self.coast_decay_interval = int(coast_decay_interval)
         self.static_bias_table = static_bias_table
         self.gain_norm_mode = (gain_norm_mode or 'none').lower()
         self.ref_bg_level = ref_bg_level
@@ -164,8 +171,21 @@ class NormalModeTracker:
         self.last_dy_rel = 0.0         # 當前幀相對於參考幀的 Y 累積位移
         self.global_x = 0.0            # 追蹤器的全局 X 累積座標
         self.global_y = 0.0            # 追蹤器的全局 Y 累積座標
-        self.v_x = 0.0                 # 內部 IIR 平滑速度預估 (px/frame)
-        self.v_y = 0.0                 # 內部 IIR 平滑速度預估 (px/frame)
+        self.v_x = 0.0                 # 內部 IIR/FIR 平滑速度預估 (px/frame)
+        self.v_y = 0.0                 # 內部 IIR/FIR 平滑速度預估 (px/frame)
+        self.fir_vx = [0.0, 0.0, 0.0, 0.0]
+        self.fir_vy = [0.0, 0.0, 0.0, 0.0]
+        self.fir_ptr = 0
+        self.consec_coast = 0
+        self.stats = {
+            'frames': 0,
+            'coast_frames': 0,
+            'center_hit_frames': 0,
+            'border_hit_frames': 0,
+            'recenter_frames': 0,
+            'keyframe_updates': 0,
+            'spike_clamped_frames': 0,
+        }
 
     def normalize_frame_gain(self, raw_frame):
         """零 Line-Buffer 全幀曝光亮度增益正規化 (抑制 Clean Glass 曝光/反光漂移調制 FPN 殘影)"""
@@ -409,30 +429,94 @@ class NormalModeTracker:
             self.ref_idx = frame_idx
             self.last_dx_rel = 0.0
             self.last_dy_rel = 0.0
+            self.stats['keyframe_updates'] += 1
             return True
         return False
 
-    def update_velocity_filter(self, frame_dx, frame_dy):
+    def update_velocity_filter(self, frame_dx, frame_dy, is_coasting=False):
         """
-        步驟 8: 速度突波防污染過濾器 (Velocity Spike / Innovation Gate)
+        步驟 8: 速度預測與突波防污染過濾器
+          - legacy_iir : 浮點 IIR (v_alpha + 0.2*v_alpha 突波衰減)
+          - shift_iir  : IC 零乘法移位 IIR (alpha=1/4 >>2，創新量突波 clamp 後 alpha=1/16 >>4) + 長 TL 阻尼衰減
+          - shift_fir4 : OptNavi 4 幀移位平均 FIR (sum>>2，無乘法器) + 創新量突波保護 + 長 TL 阻尼衰減
         """
+        if is_coasting:
+            self.consec_coast += 1
+            self.stats['coast_frames'] += 1
+            if self.predictor_mode in ('shift_iir', 'shift_fir4'):
+                if self.coast_decay_interval > 0 and (self.consec_coast % self.coast_decay_interval == 0):
+                    # 連續無紋理滑行時每 K 幀衰減 1/8 (純右移減法 >>3)，防止圓弧切線外飛
+                    self.v_x -= self.v_x * 0.125
+                    self.v_y -= self.v_y * 0.125
+                    if self.predictor_mode == 'shift_fir4':
+                        self.fir_vx = [self.v_x, self.v_x, self.v_x, self.v_x]
+                        self.fir_vy = [self.v_y, self.v_y, self.v_y, self.v_y]
+                return
+        else:
+            self.consec_coast = 0
+
         max_phys_v = self.max_phys_v
-        # 檢查是否為網格翻轉產生的突波
-        diff_vx = abs(frame_dx - self.v_x)
-        diff_vy = abs(frame_dy - self.v_y)
-        
-        # 若單幀速度超過合理物理範圍，予以飽和鉗位，保護 IIR 預測器不被污染
         clamped_dx = max(-max_phys_v, min(max_phys_v, frame_dx))
         clamped_dy = max(-max_phys_v, min(max_phys_v, frame_dy))
-        
-        if diff_vx > (max_phys_v * 1.1) or diff_vy > (max_phys_v * 1.1):
-            # 劇烈跳變：判定為交界翻轉突波，減小更新權重
-            alpha = self.v_alpha * 0.2
-        else:
-            alpha = self.v_alpha
 
-        self.v_x = (1.0 - alpha) * self.v_x + alpha * clamped_dx
-        self.v_y = (1.0 - alpha) * self.v_y + alpha * clamped_dy
+        if self.predictor_mode == 'legacy_iir':
+            diff_vx = abs(frame_dx - self.v_x)
+            diff_vy = abs(frame_dy - self.v_y)
+            if diff_vx > (max_phys_v * 1.1) or diff_vy > (max_phys_v * 1.1):
+                alpha = self.v_alpha * 0.2
+                self.stats['spike_clamped_frames'] += 1
+            else:
+                alpha = self.v_alpha
+            self.v_x = (1.0 - alpha) * self.v_x + alpha * clamped_dx
+            self.v_y = (1.0 - alpha) * self.v_y + alpha * clamped_dy
+            return
+
+        err_x = clamped_dx - self.v_x
+        err_y = clamped_dy - self.v_y
+        is_spike = (abs(err_x) > self.max_accel) or (abs(err_y) > self.max_accel)
+
+        if self.predictor_mode == 'shift_fir4':
+            if is_spike:
+                self.stats['spike_clamped_frames'] += 1
+                in_x = self.v_x + max(-self.max_accel, min(self.max_accel, err_x))
+                in_y = self.v_y + max(-self.max_accel, min(self.max_accel, err_y))
+            else:
+                in_x = clamped_dx
+                in_y = clamped_dy
+            self.fir_vx[self.fir_ptr] = in_x
+            self.fir_vy[self.fir_ptr] = in_y
+            self.fir_ptr = (self.fir_ptr + 1) & 3
+            self.v_x = 0.25 * (self.fir_vx[0] + self.fir_vx[1] + self.fir_vx[2] + self.fir_vx[3])
+            self.v_y = 0.25 * (self.fir_vy[0] + self.fir_vy[1] + self.fir_vy[2] + self.fir_vy[3])
+            return
+
+        # default: 'shift_iir' (>>2 normal, >>4 clamped spike)
+        if is_spike:
+            self.stats['spike_clamped_frames'] += 1
+            err_x = max(-self.max_accel, min(self.max_accel, err_x))
+            err_y = max(-self.max_accel, min(self.max_accel, err_y))
+            shift_alpha = 0.0625
+        else:
+            shift_alpha = 0.25
+        self.v_x += err_x * shift_alpha
+        self.v_y += err_y * shift_alpha
+
+    def get_diagnostics(self):
+        """回傳 Stage A 預測與搜尋窗診斷統計摘要"""
+        n_track = max(1, self.stats['frames'] - 1)
+        n_match = max(1, n_track - self.stats['coast_frames'])
+        return {
+            'frames': self.stats['frames'],
+            'coast_frames': self.stats['coast_frames'],
+            'coast_ratio_pct': round(100.0 * self.stats['coast_frames'] / n_track, 2),
+            'center_hit_frames': self.stats['center_hit_frames'],
+            'pp_center_hit_pct': round(100.0 * self.stats['center_hit_frames'] / n_match, 2),
+            'border_hit_frames': self.stats['border_hit_frames'],
+            'border_hit_pct': round(100.0 * self.stats['border_hit_frames'] / n_match, 2),
+            'recenter_frames': self.stats['recenter_frames'],
+            'keyframe_updates': self.stats['keyframe_updates'],
+            'spike_clamped_frames': self.stats['spike_clamped_frames'],
+        }
 
     @staticmethod
     def calibrate_csbc_table(raw_loader_fn, total_frames, preprocess_fn, max_lag=4):
@@ -492,6 +576,7 @@ class NormalModeTracker:
 
     def step(self, raw_frame, frame_idx):
         """自主模式單幀處理主流程"""
+        self.stats['frames'] += 1
         cur_frame = self.preprocess_frame(raw_frame)
         squal = self.compute_squal(cur_frame)
 
@@ -534,12 +619,19 @@ class NormalModeTracker:
                 frame_dy = self.v_y
                 dx_q = self.last_dx_rel + frame_dx
                 dy_q = self.last_dy_rel + frame_dy
+                self.update_velocity_filter(frame_dx, frame_dy, is_coasting=True)
             else:
+                if u_idx == r and v_idx == r:
+                    self.stats['center_hit_frames'] += 1
+                elif u_idx == 0 or u_idx == 2*r or v_idx == 0 or v_idx == 2*r:
+                    self.stats['border_hit_frames'] += 1
+
                 dx_int = px + (u_idx - r)
                 dy_int = py + (v_idx - r)
                 if 0 < u_idx < 2*r and 0 < v_idx < 2*r:
                     dx_sub, dy_sub = self.compute_subpixel_offset(surface, v_idx, u_idx)
                 else:
+                    self.stats['recenter_frames'] += 1
                     # 峰值落於搜尋邊界時，以 (dx_int, dy_int) 為中心重取 3x3 局部曲面做無偏 2D 拋物面內插
                     surf_re = np.zeros((3, 3), dtype=np.float32)
                     for dy2 in range(-1, 2):
@@ -555,8 +647,8 @@ class NormalModeTracker:
                 dy_q = round(dy_tot * self.subpixel_scale) / self.subpixel_scale
                 frame_dx = dx_q - self.last_dx_rel
                 frame_dy = dy_q - self.last_dy_rel
+                self.update_velocity_filter(frame_dx, frame_dy, is_coasting=False)
 
-            self.update_velocity_filter(frame_dx, frame_dy)
             self.global_x += frame_dx
             self.global_y += frame_dy
             self.last_dx_rel = dx_q
@@ -570,13 +662,14 @@ class NormalModeTracker:
                 self.ref_idx = frame_idx
                 self.last_dx_rel = 0.0
                 self.last_dy_rel = 0.0
+                self.stats['keyframe_updates'] += 1
         else:
             if self.zncc_coast_th is not None and best_score < self.zncc_coast_th:
                 frame_dx = self.v_x
                 frame_dy = self.v_y
                 dx_q = self.last_dx_rel + frame_dx
                 dy_q = self.last_dy_rel + frame_dy
-                self.update_velocity_filter(frame_dx, frame_dy)
+                self.update_velocity_filter(frame_dx, frame_dy, is_coasting=True)
                 self.global_x += frame_dx
                 self.global_y += frame_dy
                 self.last_dx_rel = dx_q
@@ -586,7 +679,13 @@ class NormalModeTracker:
                     self.ref_idx = frame_idx
                     self.last_dx_rel = 0.0
                     self.last_dy_rel = 0.0
+                    self.stats['keyframe_updates'] += 1
             else:
+                if u_idx == r and v_idx == r:
+                    self.stats['center_hit_frames'] += 1
+                elif u_idx == 0 or u_idx == 2*r or v_idx == 0 or v_idx == 2*r:
+                    self.stats['border_hit_frames'] += 1
+
                 dx_int = px + (u_idx - r)
                 dy_int = py + (v_idx - r)
 
@@ -602,7 +701,7 @@ class NormalModeTracker:
                 frame_dy = dy_q - self.last_dy_rel
 
                 # 更新速度濾波器 (防污染保護)
-                self.update_velocity_filter(frame_dx, frame_dy)
+                self.update_velocity_filter(frame_dx, frame_dy, is_coasting=False)
 
                 # 更新全局累積位置
                 self.global_x += frame_dx

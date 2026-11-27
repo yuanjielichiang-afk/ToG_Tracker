@@ -39,8 +39,12 @@ DEFAULT_RAW_LIST = [
     r"C:\Data\testPattern玻璃\Circle_R0.1inch_IPS0.005_Glass\POS1-1.raw",
     r"C:\Data\testPattern玻璃\Circle_R0.1inch_IPS0.005_Glass\POS1-2.raw",
     r"C:\Data\testPattern玻璃\Circle_R0.1inch_IPS0.005_Glass\POS1-3.raw",
-    # 2. R=0.2 inch, 0.02 ips
+    # 2. R=0.2 inch, 0.02 ips (Glass)
     r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_Glass\RAW\POS1-1.raw",
+    # 2b. R=0.2 inch, 0.02 ips (MousePad)
+    r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_MousePad\MousePad-1.raw",
+    r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_MousePad\MousePad-2.raw",
+    r"C:\Data\testPattern玻璃\Circle_R0.2inch_IPS0.02_MousePad\MousePad-3.raw",
     # 3. R=0.5 inch, Dirty Glass, 0.1 ips
     r"C:\Data\testPattern玻璃\20260529\Circle\Dirty Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image\P3950_Circle_0.5inch_1rev_0.1ips-1.raw",
     r"C:\Data\testPattern玻璃\20260529\Circle\Dirty Glass\Radius 0.5 inch\P3950_Circle_0.5inch_1rev_0.1ips\Image\P3950_Circle_0.5inch_1rev_0.1ips-2.raw",
